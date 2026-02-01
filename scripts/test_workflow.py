@@ -46,10 +46,6 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-import matplotlib.pyplot as plt
-#import matplotlib
-#matplotlib.use('TKAgg')
-
 import gymnasium as gym
 import os
 from datetime import datetime
@@ -236,7 +232,17 @@ def main():
         actions   = torch.cat(actions)
         advantage = returns - values
 
-        actor_loss, critic_loss, loss, entropy = ppo_update(model, optimizer, ppo_epochs, mini_batch_size, states, actions, log_probs, returns, advantage)
+        actor_loss, critic_loss, loss, entropy = ppo_update(
+            model,
+            optimizer,
+            ppo_epochs,
+            mini_batch_size,
+            states,
+            actions,
+            log_probs,
+            returns,
+            advantage
+        )
 
     print('----------------------------')
     print('Complete')

@@ -55,7 +55,18 @@ def ppo_iter(mini_batch_size, states, actions, log_probs, returns, advantage):
     for i in range(len(ids)):
         yield states[ids[i], :], actions[ids[i], :], log_probs[ids[i], :], returns[ids[i], :], advantage[ids[i], :]
 
-def ppo_update(model, optimizer, ppo_epochs, mini_batch_size, states, actions, log_probs, returns, advantages, clip_param=0.2):
+def ppo_update(
+        model,
+        optimizer,
+        ppo_epochs,
+        mini_batch_size,
+        states,
+        actions,
+        log_probs,
+        returns,
+        advantages,
+        clip_param=0.2,
+    ):
     actor_loss_arr = []
     critic_loss_arr = []
     loss_arr = []

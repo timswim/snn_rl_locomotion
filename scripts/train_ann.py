@@ -14,6 +14,9 @@ parser = argparse.ArgumentParser(description="Train an ANN RL agent with torch."
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
+parser.add_argument(
+    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
+)
 parser.add_argument("--num_envs", type=int, default=32, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="Isaac-Velocity-Flat-Unitree-A1-v0", help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
@@ -130,15 +133,15 @@ def main():
     
     # ---------- SPACES ----------
     num_inputs  = envs.observation_space.spaces['policy'].shape[1]
-    num_outputs = 12 # сейчас я знаю что это 12, но на будющее надо будет как-то эту размерность вытянуть
+    #num_outputs = 12 # сейчас я знаю что это 12, но на будющее надо будет как-то эту размерность вытянуть
     #num_outputs = env.action_space.n
-    act_dim = envs.action_space.shape[1]  # ← ВАЖНО: больше не хардкодим
+    num_outputs = envs.action_space.shape[1]  # ← ВАЖНО: больше не хардкодим
     
     print('State Num: %d, Action Num: %d' % (num_inputs, num_outputs))
 
     # Hyper params:
     hidden_sizes     = [512, 256, 128]  #[512, 256, 128]  
-    lr               = 1e-3 # 1e-3
+    lr               = 1e-4 # 1e-3
     num_steps        = 24  # 24
     mini_batch_size  = 192  # 192
     ppo_epochs       = 5   # 30
@@ -156,11 +159,7 @@ def main():
         hidden_sizes
     ).to(device)
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    #actor = Actor(num_inputs=num_inputs, num_outputs=num_outputs, hidden_sizes=[512, 256, 128]).to(device)
-    #critic = Critic(num_inputs=num_inputs, hidden_sizes=[512, 256, 128]).to(device)
-    #optimizer_actor = torch.optim.Adam(actor.parameters(), lr=1e-4)
-    #optimizer_critic = torch.optim.Adam(critic.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
 
     max_steps = 100000
     step_idx  = 0
@@ -168,9 +167,9 @@ def main():
     state = envs.reset()
     state = state[0]['policy']
 
-    from running_ms import RunningMeanStd
-    obs_rms = RunningMeanStd(shape=num_inputs, device=device)
-    rts_rms = RunningMeanStd(shape=1, device=device)
+    #from running_ms import RunningMeanStd
+    #obs_rms = RunningMeanStd(shape=num_inputs, device=device)
+    #rts_rms = RunningMeanStd(shape=1, device=device)
 
     while step_idx < max_steps: # Сам цикл обучения
         # обнуляем все массивы в начале эпизода
@@ -192,9 +191,9 @@ def main():
                 cached_sums[term_name] = buf.clone()
             
             # 🔹 Обновляем статистику по текущему батчу состояний
-            obs_rms.update(state)  # [num_envs, obs_dim]
+            #obs_rms.update(state)  # [num_envs, obs_dim]
             # 🔹 Нормализуем состояния перед подачей в модель
-            norm_state = obs_rms.normalize(state)
+            #norm_state = obs_rms.normalize(state)
 
             # Получаем распределение и оценку функции ценности относительно текущего состояния
             dist, value = model(state)
@@ -205,10 +204,12 @@ def main():
             # === 2. Делаем шаг ===
             next_state, reward, terminated, truncated, _  = envs.step(action) # Получаем ответ среды, интересно как тут "_" работает
             total_reward = total_reward + torch.sum(reward).item()
+            
             # debug
             if (total_reward) < -3000:
                 print('alert')
             # debug
+            
             done = torch.logical_or(terminated, truncated)
             # Что-то для расчета алгоритма
             log_prob = dist.log_prob(action)
@@ -267,21 +268,24 @@ def main():
         '''
 
 
-        returns, deltas = compute_gae(next_value, rewards, masks, values)
+        #returns, deltas = compute_gae(next_value, rewards, masks, values)
+        returns = compute_gae(next_value, rewards, masks, values)
 
         # Какая-то постобработка данных
-        rewards   = torch.cat(rewards).detach()
-        deltas    = torch.cat(deltas).detach()
-        returns   = torch.cat(returns)
-        log_probs = torch.cat(log_probs)
-        values    = torch.cat(values)
+        rewards   = torch.cat(rewards).detach() # Просто для визуализации
+        #deltas    = torch.cat(deltas).detach() # Просто для визуализации
+        returns   = torch.cat(returns).detach()
+        log_probs = torch.cat(log_probs).detach()
+        values    = torch.cat(values).detach()
         states    = torch.cat(states)
         actions   = torch.cat(actions)
         advantage = returns - values
-        advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8) # Нормализуем advantage
+        
+        # advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8) # Нормализуем advantage
+        
          # Нормализуем returns
-        rts_rms.update(returns) # Обновление rms для returns
-        returns_norm = rts_rms.normalize(returns)
+        #rts_rms.update(returns) # Обновление rms для returns
+        #returns_norm = rts_rms.normalize(returns)
         #print("log_probs requires_grad:", log_probs.requires_grad)
         #print("values requires_grad:", values.requires_grad)
         #print("advantages requires_grad:", advantage.requires_grad)
@@ -290,34 +294,36 @@ def main():
         #print("returns mean/std:", returns.mean().item(), returns.std().item())
         #print("values mean/std:", values.mean().item(), values.std().item())
         
-        actor_loss, critic_loss, entropy, loss, ratio_mean, learning_rate = ppo_update(model, 
-                   optimizer, 
-                   ppo_epochs, 
-                   mini_batch_size, 
-                   states, 
-                   actions, 
-                   log_probs, 
-                   returns,
-                   advantage,
-                   values,
-                   clip_param = clip_param,
-                   value_clip=0.2, # 0.2
-                   entropy_loss_scale=0.01, # 0.01
-                   value_loss_scale=1.0, # 1.0
-                   kl_threshold=0.01) # 0.01
+        actor_loss, critic_loss, loss, entropy = ppo_update(
+            model,
+            optimizer,
+            ppo_epochs,
+            mini_batch_size,
+            states,
+            actions,
+            log_probs,
+            returns,
+            advantage,
+            #values,
+            clip_param = clip_param,
+            #value_clip=0.2, # 0.2
+            #entropy_loss_scale=0.01, # 0.01
+            #value_loss_scale=1.0, # 1.0
+            #kl_threshold=0.01, # 0.01
+        )
         
         writer.add_histogram('Info/' + 'rewards', rewards, step_idx)
         writer.add_histogram('Info/' + 'values', values, step_idx)
         writer.add_histogram('Info/' + 'returns', returns, step_idx)
         writer.add_histogram('Info/' + 'advantage', advantage, step_idx)
-        writer.add_histogram('Info/' + 'deltas', deltas, step_idx)
+        #writer.add_histogram('Info/' + 'deltas', deltas, step_idx)
         writer.add_histogram('Info/' + 'log_probs', log_probs, step_idx)
         writer.add_scalar('Loss/' + 'actor_loss', actor_loss, step_idx)
         writer.add_scalar('Loss/' + 'critic_loss', critic_loss, step_idx)
         writer.add_scalar('Loss/' + 'entropy', entropy, step_idx)
         writer.add_scalar('Loss/' + 'loss', loss, step_idx)
-        writer.add_scalar('Loss/' + 'ratio_mean', ratio_mean, step_idx)
-        writer.add_scalar('Loss/' + 'learning_rate', learning_rate, step_idx)
+        #writer.add_scalar('Loss/' + 'ratio_mean', ratio_mean, step_idx)
+        #writer.add_scalar('Loss/' + 'learning_rate', learning_rate, step_idx)
 
         torch.save({"state_dict": model.state_dict(), # А надо ли сохранять веса критика тоже?
                                 "optimizer": optimizer.state_dict(), 
