@@ -17,7 +17,7 @@ parser.add_argument("--video_interval", type=int, default=2000, help="Interval b
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=32, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=32, help="Number of environments to simulate.") # А может попробовать больше сред создавать? Забить память
 parser.add_argument("--task", type=str, default="Isaac-Velocity-Flat-Unitree-A1-v0", help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument(
@@ -66,7 +66,6 @@ import torch.optim as optim
 
 from tensorboardX import SummaryWriter
 
-#from spikePPO import ActorCritic, compute_gae, ppo_update
 from models.PPO import ActorCritic, compute_gae, ppo_update
 
 # Use CUDA
@@ -88,9 +87,6 @@ torch.backends.cudnn.deterministic = True
 def main():
 
     # --------Classic workflow--------
-
-    # read the seed from command line
-    args_cli_seed = args_cli.seed
 
     # parse configuration
     # ---------- ENV CONFIG ----------
@@ -133,9 +129,7 @@ def main():
     
     # ---------- SPACES ----------
     num_inputs  = envs.observation_space.spaces['policy'].shape[1]
-    #num_outputs = 12 # сейчас я знаю что это 12, но на будющее надо будет как-то эту размерность вытянуть
-    #num_outputs = env.action_space.n
-    num_outputs = envs.action_space.shape[1]  # ← ВАЖНО: больше не хардкодим
+    num_outputs = envs.action_space.shape[1]
     
     print('State Num: %d, Action Num: %d' % (num_inputs, num_outputs))
 
@@ -197,12 +191,9 @@ def main():
 
             # Получаем распределение и оценку функции ценности относительно текущего состояния
             dist, value = model(state)
-            
-            action = dist.sample() # Выбираем случайное? действие  torch.max(action, 1)[1].cpu().numpy()
-            wrap_action_0 = torch.max(action, 1, keepdim =True)[0] # вероятноси или что это, непонятно
-            wrap_action_1 = torch.max(action, 1, keepdim =True)[1] # само действие
+            action = dist.sample()
             # === 2. Делаем шаг ===
-            next_state, reward, terminated, truncated, _  = envs.step(action) # Получаем ответ среды, интересно как тут "_" работает
+            next_state, reward, terminated, truncated, _  = envs.step(action)
             total_reward = total_reward + torch.sum(reward).item()
             
             # debug
@@ -211,9 +202,8 @@ def main():
             # debug
             
             done = torch.logical_or(terminated, truncated)
-            # Что-то для расчета алгоритма
+
             log_prob = dist.log_prob(action)
-            entropy += dist.entropy().mean() # Зачем тут вообще эта энтропия
             # Запоминаем все
             log_probs.append(log_prob)
             values.append(value)
@@ -246,34 +236,11 @@ def main():
         next_state = next_state['policy']
         _, next_value = model(next_state)
 
-        '''
-        # Нормализация rewards
-        # Преобразуем список тензоров rewards -> [T, 1] тензор
-        rewards_tensor = torch.cat(rewards, dim=0)
-        # Z-score нормализация по rollout
-        mean_reward = rewards_tensor.mean()
-        std_reward = rewards_tensor.std() + 1e-8
-        normalized_rewards_tensor = (rewards_tensor - mean_reward) / std_reward
-        # Разбиваем обратно на список тензоров поэлементно (чтобы не менять compute_gae)
-        normalized_rewards = torch.split(normalized_rewards_tensor, args_cli.num_envs, dim=0)
-        rewards = [r.clone()/20 for r in normalized_rewards]  # пересохраняем обратно в список
-        '''
-        '''
-        rewards_tensor = torch.stack(rewards, dim=0)  # [T, N, 1]
-        mean_r = rewards_tensor.mean()
-        std_r = rewards_tensor.std() + 1e-8
-        rewards_tensor = (rewards_tensor - mean_r) / std_r
-        # обратно в список шагов
-        rewards = [rewards_tensor[t] for t in range(num_steps)]
-        '''
-
-
         #returns, deltas = compute_gae(next_value, rewards, masks, values)
         returns = compute_gae(next_value, rewards, masks, values)
 
         # Какая-то постобработка данных
-        rewards   = torch.cat(rewards).detach() # Просто для визуализации
-        #deltas    = torch.cat(deltas).detach() # Просто для визуализации
+        rewards   = torch.cat(rewards).detach()
         returns   = torch.cat(returns).detach()
         log_probs = torch.cat(log_probs).detach()
         values    = torch.cat(values).detach()
@@ -281,18 +248,12 @@ def main():
         actions   = torch.cat(actions)
         advantage = returns - values
         
-        # advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8) # Нормализуем advantage
+        # Нормализуем advantage
+        # advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
         
-         # Нормализуем returns
+        # Нормализуем returns
         #rts_rms.update(returns) # Обновление rms для returns
         #returns_norm = rts_rms.normalize(returns)
-        #print("log_probs requires_grad:", log_probs.requires_grad)
-        #print("values requires_grad:", values.requires_grad)
-        #print("advantages requires_grad:", advantage.requires_grad)
-
-        #print("rewards mean/std:", rewards.mean().item(), rewards.std().item())
-        #print("returns mean/std:", returns.mean().item(), returns.std().item())
-        #print("values mean/std:", values.mean().item(), values.std().item())
         
         actor_loss, critic_loss, loss, entropy = ppo_update(
             model,
@@ -304,37 +265,28 @@ def main():
             log_probs,
             returns,
             advantage,
-            #values,
             clip_param = clip_param,
-            #value_clip=0.2, # 0.2
-            #entropy_loss_scale=0.01, # 0.01
-            #value_loss_scale=1.0, # 1.0
-            #kl_threshold=0.01, # 0.01
         )
         
         writer.add_histogram('Info/' + 'rewards', rewards, step_idx)
         writer.add_histogram('Info/' + 'values', values, step_idx)
         writer.add_histogram('Info/' + 'returns', returns, step_idx)
         writer.add_histogram('Info/' + 'advantage', advantage, step_idx)
-        #writer.add_histogram('Info/' + 'deltas', deltas, step_idx)
         writer.add_histogram('Info/' + 'log_probs', log_probs, step_idx)
         writer.add_scalar('Loss/' + 'actor_loss', actor_loss, step_idx)
         writer.add_scalar('Loss/' + 'critic_loss', critic_loss, step_idx)
         writer.add_scalar('Loss/' + 'entropy', entropy, step_idx)
         writer.add_scalar('Loss/' + 'loss', loss, step_idx)
-        #writer.add_scalar('Loss/' + 'ratio_mean', ratio_mean, step_idx)
-        #writer.add_scalar('Loss/' + 'learning_rate', learning_rate, step_idx)
 
         torch.save({"state_dict": model.state_dict(), # А надо ли сохранять веса критика тоже?
                                 "optimizer": optimizer.state_dict(), 
-                                "hidden_sizes": hidden_sizes},
-                                #"T": T}, 
+                                "hidden_sizes": hidden_sizes}, 
                                 os.path.join(log_dir, 'checkpoints', 'agent_' + str(step_idx) + '.pth'))
 
     print('----------------------------')
     print('Complete')
 
-    #writer.close()
+    writer.close()
 
 
 if __name__ == "__main__":
