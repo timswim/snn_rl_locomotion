@@ -19,6 +19,8 @@ EXTENSION_TOML_DATA = toml.load(os.path.join(EXTENSION_PATH, "config", "extensio
 INSTALL_REQUIRES = [
     # NOTE: Add dependencies
     "psutil",
+    "mlflow --no-deps",
+    "optuna",
 ]
 
 # Installation operation
