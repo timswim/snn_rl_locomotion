@@ -2,7 +2,7 @@
 Script to train ANN RL agent with torch.
 Supports optional MLFlow logging and Optuna hyperparameter tuning.
 """
-
+"mlflow ui --backend-store-uri ./mlruns --port 5000"
 """Launch Isaac Sim Simulator first."""
 
 import argparse
@@ -18,7 +18,7 @@ parser.add_argument("--video_interval", type=int, default=2000, help="Interval b
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=32, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=256, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="Isaac-Velocity-Flat-Unitree-A1-v0", help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument(
@@ -52,6 +52,7 @@ parser.add_argument(
 parser.add_argument("--use_mlflow", action="store_true", default=True, help="Log to local MLFlow.")
 parser.add_argument("--optuna", action="store_true", default=False, help="Run Optuna hyperparameter study.")
 parser.add_argument("--optuna_n_trials", type=int, default=20, help="Number of Optuna trials when --optuna is set.")
+parser.add_argument("--run_name", type=str, default=None, help="MLFlow run name (default: train_ann_<timestamp> when run alone).")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -91,13 +92,13 @@ device = torch.device("cuda" if use_cuda else "cpu")
 # Default hyperparameters
 DEFAULT_HIDDEN_SIZES = [512, 256, 128]
 DEFAULT_LR = 1e-4
-DEFAULT_NUM_STEPS = 24
+DEFAULT_NUM_STEPS = 32
 DEFAULT_MINI_BATCH_SIZE = 192
 DEFAULT_PPO_EPOCHS = 5
 DEFAULT_CLIP_PARAM = 0.2
-DEFAULT_MAX_STEPS = 100000
+DEFAULT_MAX_STEPS = 50000
 
-MODEL_TEST_FREQ = 500
+MODEL_TEST_FREQ = DEFAULT_NUM_STEPS*10 # Логгируем каждые 10 rollout
 CHECKPOINT_INTERVAL = 5000
 
 
@@ -178,7 +179,9 @@ def train_one_run(
 
     if use_mlflow:
         import mlflow
-        mlflow.set_tracking_uri("file://" + os.path.abspath("mlruns"))
+        # Use env var so subprocess drivers (optuna_tune_ann.py) can point to the same store as the UI
+        tracking_uri = os.environ.get("MLFLOW_TRACKING_URI") or ("file://" + os.path.abspath("mlruns"))
+        mlflow.set_tracking_uri(tracking_uri)
         mlflow.start_run(run_name=run_name)
         mlflow.log_params({
             "task": task,
@@ -186,6 +189,9 @@ def train_one_run(
             "seed": seed,
             **{k: str(v) if isinstance(v, list) else v for k, v in hyperparams.to_dict().items()},
         })
+
+    # Set seed on env config so environment creation is deterministic (avoids Isaac Lab warning).
+    env_cfg.seed = seed
 
     envs = None
     envs = gym.make(
@@ -262,14 +268,6 @@ def train_one_run(
                 state = next_state["policy"]
                 step_idx += 1
 
-                if step_idx % MODEL_TEST_FREQ == 0:
-                    mean_total_reward = total_reward / (num_envs * hyperparams.num_steps)
-                    recent_rewards.append(mean_total_reward)
-                    print("Step: %d, Mean total reward: %.2f" % (step_idx, total_reward / num_envs))
-                    writer.add_scalar("Reward/mean_total_reward", mean_total_reward, step_idx)
-                    if use_mlflow:
-                        mlflow.log_metric("Reward/mean_total_reward", mean_total_reward, step=step_idx)
-
                 if terminated.any():
                     env_ids = terminated.nonzero(as_tuple=False).squeeze(-1)
                     for i in env_ids:
@@ -279,6 +277,15 @@ def train_one_run(
                             writer.add_scalar("Episode_Reward/%s" % term_name, episodic_value.item(), step_idx)
                             if use_mlflow:
                                 mlflow.log_metric("Episode_Reward/%s" % term_name, episodic_value.item(), step=step_idx)
+
+            # После полного rollout: средняя награда за шаг на одно env
+            mean_total_reward = total_reward / (num_envs * hyperparams.num_steps)
+            recent_rewards.append(mean_total_reward)
+            if step_idx % (hyperparams.num_steps*10) == 0: # Логгируем каждые 10 rollout TODO: убрать магическое число 10
+                print("Step: %d, Mean total reward: %.2f" % (step_idx, mean_total_reward))
+                writer.add_scalar("Reward/mean_total_reward", mean_total_reward, step_idx)
+                if use_mlflow:
+                    mlflow.log_metric("Reward/mean_total_reward", mean_total_reward, step=step_idx)
 
             next_val_state = next_state["policy"]
             _, next_value = model(next_val_state)
@@ -323,14 +330,14 @@ def train_one_run(
                     "Loss/loss": loss,
                 }, step=step_idx)
 
-            if step_idx % CHECKPOINT_INTERVAL == 0:
+            if step_idx % CHECKPOINT_INTERVAL == 0: # Пока не будем сохранять модели
                 ckpt_path = os.path.join(log_dir, "checkpoints", "agent_%d.pth" % step_idx)
-                torch.save({
-                    "state_dict": model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "hidden_sizes": hyperparams.hidden_sizes,
-                    "step_idx": step_idx,
-                }, ckpt_path)
+                #torch.save({
+                #    "state_dict": model.state_dict(),
+                #    "optimizer": optimizer.state_dict(),
+                #    "hidden_sizes": hyperparams.hidden_sizes,
+                #    "step_idx": step_idx,
+               # }, ckpt_path)
 
         mean_reward = float(np.mean(recent_rewards)) if recent_rewards else 0.0
     finally:
@@ -410,23 +417,38 @@ def main():
         datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
     )
 
-    metrics = train_one_run(
-        env_cfg=env_cfg,
-        hyperparams=hp,
-        log_dir=log_dir,
-        seed=seed,
-        use_mlflow=args_cli.use_mlflow,
-        run_name='train_ann_00',
-        checkpoint_path=args_cli.checkpoint,
-        task=args_cli.task,
-        num_envs=args_cli.num_envs,
-        video=args_cli.video,
-        video_length=args_cli.video_length,
-        video_interval=args_cli.video_interval,
-    )
+    metric_file = os.environ.get("OPTUNA_METRIC_FILE")
+    BAD_METRIC_SENTINEL = -1e9  # written on crash so Optuna driver can continue
 
-    print("----------------------------")
-    print("Complete. mean_reward=%.4f, final_step=%d" % (metrics["mean_reward"], metrics["final_step"]))
+    try:
+        run_name = args_cli.run_name or ("train_ann_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+        metrics = train_one_run(
+            env_cfg=env_cfg,
+            hyperparams=hp,
+            log_dir=log_dir,
+            seed=seed,
+            use_mlflow=args_cli.use_mlflow,
+            run_name=run_name,
+            checkpoint_path=args_cli.checkpoint,
+            task=args_cli.task,
+            num_envs=args_cli.num_envs,
+            video=args_cli.video,
+            video_length=args_cli.video_length,
+            video_interval=args_cli.video_interval,
+        )
+        print("----------------------------")
+        print("Complete. mean_reward=%.4f, final_step=%d" % (metrics["mean_reward"], metrics["final_step"]))
+        if metric_file:
+            with open(metric_file, "w") as f:
+                f.write("%.6f\n" % metrics["mean_reward"])
+    except Exception:
+        if metric_file:
+            try:
+                with open(metric_file, "w") as f:
+                    f.write("%.6f\n" % BAD_METRIC_SENTINEL)
+            except Exception:
+                pass
+        raise
 
 
 if __name__ == "__main__":

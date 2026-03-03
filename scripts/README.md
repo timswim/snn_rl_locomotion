@@ -56,7 +56,28 @@ With MLFlow:
 python train_ann.py --task=Isaac-Velocity-Flat-Unitree-A1-v0 --optuna --optuna_n_trials=20 --use_mlflow
 ```
 
-Trials reuse the same Isaac Sim process; `env.close()` is called after each trial. If you see GPU memory growth over many trials, consider a subprocess-per-trial workflow (e.g. a driver script that invokes this script once per trial with different CLI args and reads the objective from stdout or a file).
+Trials reuse the same Isaac Sim process; `env.close()` is called after each trial. If you see a hang or GPU memory growth when starting the second trial, use the subprocess-based driver below.
+
+#### Optuna: один процесс на trial (без зависаний)
+
+Скрипт **optuna_tune_ann.py** запускает каждый trial в отдельном процессе (каждый раз новый Isaac Sim). Удобно, если встроенный `--optuna` зависает на втором trial.
+
+Из каталога `scripts/`:
+
+```bash
+cd scripts
+python optuna_tune_ann.py --task=Isaac-Velocity-Flat-Unitree-A1-v0 --n_trials=20
+```
+
+С лимитом шагов и MLFlow:
+
+```bash
+python optuna_tune_ann.py --task=Isaac-Velocity-Flat-Unitree-A1-v0 --n_trials=20 --max_iterations=50000 --use_mlflow
+```
+
+Аргументы: `--task`, `--n_trials`, `--seed`, `--max_iterations`, `--num_envs`, `--use_mlflow`, `--study_name`. Драйвер не запускает Isaac Sim сам — он только вызывает `train_ann.py` с разными гиперпараметрами и парсит метрику из вывода.
+
+При `--use_mlflow` драйвер передаёт в subprocess `MLFLOW_TRACKING_URI` в каталог **корня проекта** (`../mlruns` относительно `scripts/`). Чтобы в UI отображались runs, запускайте MLflow из корня репозитория: `cd /path/to/locomotion && mlflow ui` (или `mlflow ui --backend-store-uri ./mlruns`).
 
 ### Dependencies
 
