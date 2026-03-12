@@ -11,7 +11,7 @@ import sys
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Train an ANN RL agent with torch.")
+parser = argparse.ArgumentParser(description="Train an SNN RL agent with torch.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
@@ -48,6 +48,7 @@ parser.add_argument(
     default=None,
     help="Hidden layer sizes (e.g. 512 256 128). Default: 512 256 128.",
 )
+parser.add_argument("--T", type=int, default=10, help="Time steps.")
 # MLFlow and Optuna
 parser.add_argument("--use_mlflow", action="store_true", default=True, help="Log to local MLFlow.")
 parser.add_argument("--optuna", action="store_true", default=False, help="Run Optuna hyperparameter study.")
@@ -84,7 +85,8 @@ from isaaclab_tasks.utils import parse_env_cfg
 
 # PLACEHOLDER: Extension template (do not remove this comment)
 
-from models.PPO import ActorCritic, compute_gae, ppo_update
+from models.PPO import compute_gae, ppo_update
+from models.SNN import ActorCritic
 
 # Use CUDA
 use_cuda = torch.cuda.is_available()
@@ -98,6 +100,7 @@ DEFAULT_MINI_BATCH_SIZE = 192
 DEFAULT_PPO_EPOCHS = 5
 DEFAULT_CLIP_PARAM = 0.2
 DEFAULT_MAX_STEPS = 50000
+DEFAULT_T = 10
 
 MODEL_TEST_FREQ = DEFAULT_NUM_STEPS*10 # Логгируем каждые 10 rollout
 CHECKPOINT_INTERVAL = 5000
@@ -114,6 +117,7 @@ class Hyperparams:
     ppo_epochs: int = DEFAULT_PPO_EPOCHS
     clip_param: float = DEFAULT_CLIP_PARAM
     max_steps: int = DEFAULT_MAX_STEPS
+    T: int = DEFAULT_T
 
     def to_dict(self):
         return {
@@ -124,6 +128,7 @@ class Hyperparams:
             "ppo_epochs": self.ppo_epochs,
             "clip_param": self.clip_param,
             "max_steps": self.max_steps,
+            "T": self.T,
         }
 
 
@@ -146,6 +151,8 @@ def _build_hyperparams_from_cli():
         hp.hidden_sizes = list(args_cli.hidden_sizes)
     if args_cli.max_iterations is not None:
         hp.max_steps = args_cli.max_iterations
+    if args_cli.T is not None:
+        hp.T = args_cli.T
     return hp
 
 
@@ -222,6 +229,7 @@ def train_one_run(
         num_inputs,
         num_outputs,
         hyperparams.hidden_sizes,
+        T=hyperparams.T,
     ).to(device)
     optimizer = optim.Adam(model.parameters(), lr=hyperparams.lr)
 
@@ -426,7 +434,7 @@ def main():
     BAD_METRIC_SENTINEL = -1e9  # written on crash so Optuna driver can continue
 
     try:
-        run_name = args_cli.run_name or ("train_ann_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+        run_name = args_cli.run_name or ("train_snn_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
         metrics = train_one_run(
             env_cfg=env_cfg,
             hyperparams=hp,
