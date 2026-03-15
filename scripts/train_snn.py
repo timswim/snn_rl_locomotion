@@ -18,7 +18,7 @@ parser.add_argument("--video_interval", type=int, default=2000, help="Interval b
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=256, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=64, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="Isaac-Velocity-Flat-Unitree-A1-v0", help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument(
@@ -85,8 +85,7 @@ from isaaclab_tasks.utils import parse_env_cfg
 
 # PLACEHOLDER: Extension template (do not remove this comment)
 
-from models.PPO import compute_gae, ppo_update
-from models.SNN import ActorCritic
+from models.SNN_PPO import ActorCritic, compute_gae, ppo_update
 
 # Use CUDA
 use_cuda = torch.cuda.is_available()
@@ -248,6 +247,8 @@ def train_one_run(
 
     recent_rewards = []
     mean_reward = 0.0
+    current_actor_state = None
+    current_critic_state = None
     try:
         while step_idx < hyperparams.max_steps:
             log_probs = []
@@ -263,7 +264,9 @@ def train_one_run(
                 for term_name, buf in envs.env.reward_manager._episode_sums.items():
                     cached_sums[term_name] = buf.clone()
 
-                dist, value = model(state)
+                dist, value, current_actor_state, current_critic_state = model(
+                    state, current_actor_state, current_critic_state
+                )
                 action = dist.sample()
                 next_state, reward, terminated, truncated, _ = envs.step(action)
                 total_reward = total_reward + torch.sum(reward).item()
@@ -300,7 +303,9 @@ def train_one_run(
                     mlflow.log_metric("Reward/mean_total_reward", mean_total_reward, step=step_idx)
 
             next_val_state = next_state["policy"]
-            _, next_value = model(next_val_state)
+            _, next_value, _, _ = model(
+                next_val_state, current_actor_state, current_critic_state
+            )
             returns = compute_gae(next_value, rewards, masks, values)
 
             rewards = torch.cat(rewards).detach()
