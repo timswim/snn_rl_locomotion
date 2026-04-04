@@ -1,3 +1,6 @@
+"""
+Модель SNN (актор-критик), GAE и обновление PPO с учётом скрытых состояний Norse.
+"""
 import numpy as np
 
 import torch
@@ -10,8 +13,119 @@ from norse.torch.module.sequential import SequentialState
 from norse.torch.module.leaky_integrator import LILinearCell
 from norse.torch.module.encode import ConstantCurrentLIFEncoder
 
+# BPTT / detach:
+# - Внутри одного forward() градиенты идут по микрошагам t=0..T-1 (динамика мембраны).
+# - Между шагами среды скрытое состояние отсоединяем (detach), чтобы граф не тянулся
+#   на всю длину rollout (экономия памяти). Градиенты по параметрам считаются по текущему
+#   наблюдению и отсоединённым потенциалам на входе (нет dL/dv между шагами среды).
+# - PPO пересчитывает каждый переход с сохранённым скрытым состоянием, чтобы шаг
+#   оптимизации видел то же представление, что и при сборе данных.
 
-# Neural Network
+def structural_zeros_like(state):
+    """Рекурсивно строит дерево нулевых тензоров той же структуры, что и состояние Norse (список / named tuple)."""
+    if state is None:
+        return None
+    if isinstance(state, list):
+        return [structural_zeros_like(s) for s in state]
+    if hasattr(state, "_fields"):
+        return type(state)(
+            *(torch.zeros_like(t) if isinstance(t, torch.Tensor) else t for t in state)
+        )
+    if isinstance(state, torch.Tensor): # Тут и в следующих функциях это запасной вариант, сюда даже не заходит программа.
+        return torch.zeros_like(state)
+    return state
+
+
+def detach_state(state):
+    """Отсоединяет тензоры состояния (градиент не идёт через предыдущий шаг)."""
+    if state is None:
+        return None
+    if isinstance(state, list):
+        return [detach_state(s) for s in state]
+    if hasattr(state, "_fields"):
+        return type(state)(*(t.detach() if isinstance(t, torch.Tensor) else t for t in state))
+    if isinstance(state, torch.Tensor):
+        return state.detach()
+    return state
+
+
+def stack_rollout_states(states_per_step):
+    """
+    Склеивает список состояний по шагам (батч = num_envs) в одно состояние
+    с батчем num_steps * num_envs (тот же порядок, что у torch.cat по списку наблюдений).
+    """
+    if not states_per_step:
+        return None
+    if states_per_step[0] is None:
+        return None
+    if isinstance(states_per_step[0], list):
+        return [
+            stack_rollout_states([s[i] for s in states_per_step])
+            for i in range(len(states_per_step[0]))
+        ]
+    if hasattr(states_per_step[0], "_fields"):
+        fields = states_per_step[0]._fields
+        out = []
+        for f in fields:
+            parts = [getattr(s, f) for s in states_per_step]
+            if parts[0] is None:
+                out.append(None)
+            else:
+                out.append(torch.cat(parts, dim=0))
+        return type(states_per_step[0])(*out)
+    if isinstance(states_per_step[0], torch.Tensor):
+        return torch.cat(states_per_step, dim=0)
+    return states_per_step[0]
+
+
+def index_state_batch(state, indices, device=None):
+    """Индексация по размерности 0 у всех тензоров в state (indices: long tensor или ndarray)."""
+    if state is None:
+        return None
+    if isinstance(indices, np.ndarray):
+        dev = device
+        if dev is None:
+            t0 = next(_state_tensors(state), None)
+            dev = t0.device if t0 is not None else torch.device("cpu")
+        indices = torch.as_tensor(indices, dtype=torch.long, device=dev)
+    if isinstance(state, list):
+        return [index_state_batch(s, indices) for s in state]
+    if hasattr(state, "_fields"):
+        return type(state)(
+            *(
+                t[indices] if isinstance(t, torch.Tensor) else t
+                for t in state
+            )
+        )
+    if isinstance(state, torch.Tensor):
+        return state[indices]
+    return state
+
+
+def _state_tensors(state):
+    """Обёртка по листьям-тензорам для определения устройства."""
+    if state is None:
+        return
+    if isinstance(state, list):
+        for s in state:
+            yield from _state_tensors(s)
+    elif hasattr(state, "_fields"):
+        for t in state:
+            if isinstance(t, torch.Tensor):
+                yield t
+    elif isinstance(state, torch.Tensor):
+        yield state
+
+
+def initial_zero_hidden(model, num_envs, num_inputs, device):
+    """Один раз: формы как у скрытого состояния после forward; нули как «холодный старт» (аналог None)."""
+    with torch.no_grad():
+        z = torch.zeros(num_envs, num_inputs, device=device)
+        _, _, a, c = model(z, None, None)
+    return detach_state(structural_zeros_like(a)), detach_state(structural_zeros_like(c))
+
+
+# Нейросеть (актор-критик)
 class ActorCritic(nn.Module):
     def __init__(self, num_inputs, num_outputs, hidden_sizes, T=16, std=0.0):
         super(ActorCritic, self).__init__()
@@ -46,7 +160,7 @@ class ActorCritic(nn.Module):
         dist = Normal(mu, std)
         return dist, value, actor_state, critic_state
 
-# GAE
+# GAE — обобщённая оценка преимущества (Generalized Advantage Estimation)
 def compute_gae(next_value, rewards, masks, values, gamma=0.99, tau=0.95):
     values = values + [next_value]
     gae = 0
@@ -57,14 +171,34 @@ def compute_gae(next_value, rewards, masks, values, gamma=0.99, tau=0.95):
         returns.insert(0, gae + values[step])
     return returns
 
-# Proximal Policy Optimization Algorithm
-# Arxiv: "https://arxiv.org/abs/1707.06347"
-def ppo_iter(mini_batch_size, states, actions, log_probs, returns, advantage):
+# PPO — Proximal Policy Optimization (https://arxiv.org/abs/1707.06347)
+def ppo_iter(
+    mini_batch_size,
+    states,
+    actions,
+    log_probs,
+    returns,
+    advantage,
+    actor_states_flat,
+    critic_states_flat,
+):
+    """Итератор по мини-батчам rollout; к каждому батчу подмешивает срезы скрытых состояний."""
     batch_size = states.size(0)
+    dev = states.device
     ids = np.random.permutation(batch_size)
-    ids = np.split(ids[:batch_size // mini_batch_size * mini_batch_size], batch_size // mini_batch_size)
+    ids = np.split(ids[: batch_size // mini_batch_size * mini_batch_size], batch_size // mini_batch_size)
     for i in range(len(ids)):
-        yield states[ids[i], :], actions[ids[i], :], log_probs[ids[i], :], returns[ids[i], :], advantage[ids[i], :]
+        idx = ids[i]
+        yield (
+            states[idx, :],
+            actions[idx, :],
+            log_probs[idx, :],
+            returns[idx, :],
+            advantage[idx, :],
+            index_state_batch(actor_states_flat, idx, device=dev),
+            index_state_batch(critic_states_flat, idx, device=dev),
+        )
+
 
 def ppo_update(
         model,
@@ -76,15 +210,35 @@ def ppo_update(
         log_probs,
         returns,
         advantages,
+        actor_states_flat,
+        critic_states_flat,
         clip_param=0.2,
     ):
+    """Один цикл обновления PPO по накопленному rollout; передаёт в модель сохранённые скрытые состояния."""
     actor_loss_arr = []
     critic_loss_arr = []
     loss_arr = []
     entropy_arr = []
     for _ in range(ppo_epochs):
-        for state, action, old_log_probs, return_, advantage in ppo_iter(mini_batch_size, states, actions, log_probs, returns, advantages):
-            dist, value, _, _ = model(state)
+        for (
+            state,
+            action,
+            old_log_probs,
+            return_,
+            advantage,
+            actor_s,
+            critic_s,
+        ) in ppo_iter(
+            mini_batch_size,
+            states,
+            actions,
+            log_probs,
+            returns,
+            advantages,
+            actor_states_flat,
+            critic_states_flat,
+        ):
+            dist, value, _, _ = model(state, actor_s, critic_s)
             entropy = dist.entropy().mean()
             new_log_probs = dist.log_prob(action)
 

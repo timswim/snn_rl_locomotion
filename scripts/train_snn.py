@@ -18,7 +18,7 @@ parser.add_argument("--video_interval", type=int, default=2000, help="Interval b
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=64, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=256, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="Isaac-Velocity-Flat-Unitree-A1-v0", help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument(
@@ -85,9 +85,16 @@ from isaaclab_tasks.utils import parse_env_cfg
 
 # PLACEHOLDER: Extension template (do not remove this comment)
 
-from models.SNN_PPO import ActorCritic, compute_gae, ppo_update
+from models.SNN_PPO import (
+    ActorCritic,
+    compute_gae,
+    detach_state,
+    initial_zero_hidden,
+    ppo_update,
+    stack_rollout_states,
+)
 
-# Use CUDA
+# CUDA при наличии
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
 
@@ -171,8 +178,8 @@ def train_one_run(
     experiment_name: str = None,
 ):
     """
-    Run one PPO training. Creates env, model, runs loop, closes env.
-    Returns metrics dict for Optuna/MLFlow (e.g. mean_reward, final_step).
+    Один прогон обучения PPO: создаёт среду, модель, цикл обучения, закрывает среду.
+    Возвращает словарь метрик для Optuna/MLFlow (например mean_reward, final_step).
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -240,15 +247,17 @@ def train_one_run(
             optimizer.load_state_dict(ckpt["optimizer"])
         if "step_idx" in ckpt:
             step_idx = ckpt["step_idx"]
-        print("[INFO] Resumed from checkpoint: %s at step %d" % (checkpoint_path, step_idx))
+        print("[INFO] Продолжение с чекпоинта: %s, шаг %d" % (checkpoint_path, step_idx))
+
+    current_actor_state, current_critic_state = initial_zero_hidden(
+        model, num_envs, num_inputs, device
+    )
 
     state, _ = envs.reset()
     state = state["policy"]
 
     recent_rewards = []
     mean_reward = 0.0
-    current_actor_state = None
-    current_critic_state = None
     try:
         while step_idx < hyperparams.max_steps:
             log_probs = []
@@ -258,15 +267,21 @@ def train_one_run(
             rewards = []
             masks = []
             total_reward = 0
+            rollout_actor_states = []
+            rollout_critic_states = []
 
             for _ in range(hyperparams.num_steps):
                 cached_sums = {}
                 for term_name, buf in envs.env.reward_manager._episode_sums.items():
                     cached_sums[term_name] = buf.clone()
 
+                rollout_actor_states.append(detach_state(current_actor_state))
+                rollout_critic_states.append(detach_state(current_critic_state))
                 dist, value, current_actor_state, current_critic_state = model(
                     state, current_actor_state, current_critic_state
                 )
+                current_actor_state = detach_state(current_actor_state)
+                current_critic_state = detach_state(current_critic_state)
                 action = dist.sample()
                 next_state, reward, terminated, truncated, _ = envs.step(action)
                 total_reward = total_reward + torch.sum(reward).item()
@@ -316,6 +331,9 @@ def train_one_run(
             actions = torch.cat(actions)
             advantage = returns - values
 
+            actor_states_flat = stack_rollout_states(rollout_actor_states)
+            critic_states_flat = stack_rollout_states(rollout_critic_states)
+
             actor_loss, critic_loss, loss, entropy = ppo_update(
                 model,
                 optimizer,
@@ -326,6 +344,8 @@ def train_one_run(
                 log_probs,
                 returns,
                 advantage,
+                actor_states_flat,
+                critic_states_flat,
                 clip_param=hyperparams.clip_param,
             )
 
