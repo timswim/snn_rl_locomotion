@@ -36,6 +36,32 @@ def structural_zeros_like(state):
     return state
 
 
+def reset_state_batch_indices(state, indices):
+    """
+    Обнуляет скрытое состояние Norse по размерности батча (dim=0) для указанных индексов сред.
+    Вызывать при завершении эпизода (terminated / truncated / time limit), когда среда автоматически
+    перезапускается, чтобы память SNN не переносилась между эпизодами.
+    """
+    if state is None:
+        return
+    if not isinstance(indices, torch.Tensor) or indices.numel() == 0:
+        return
+    t0 = next(_state_tensors(state), None)
+    if t0 is not None:
+        indices = indices.to(device=t0.device, dtype=torch.long)
+    if isinstance(state, list):
+        for s in state:
+            reset_state_batch_indices(s, indices)
+        return
+    if hasattr(state, "_fields"):
+        for t in state:
+            if isinstance(t, torch.Tensor):
+                t[indices] = 0
+        return
+    if isinstance(state, torch.Tensor):
+        state[indices] = 0
+
+
 def detach_state(state):
     """Отсоединяет тензоры состояния (градиент не идёт через предыдущий шаг)."""
     if state is None:

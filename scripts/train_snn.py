@@ -91,6 +91,7 @@ from models.SNN_PPO import (
     detach_state,
     initial_zero_hidden,
     ppo_update,
+    reset_state_batch_indices,
     stack_rollout_states,
 )
 
@@ -287,6 +288,12 @@ def train_one_run(
                 total_reward = total_reward + torch.sum(reward).item()
 
                 done = torch.logical_or(terminated, truncated)
+                # Среда перезапускает эпизод: обнуляем скрытое состояние SNN для этих env,
+                # иначе память LIF переносится на новый rollout и искажает PPO.
+                if done.any():
+                    env_ids = torch.where(done)[0]
+                    reset_state_batch_indices(current_actor_state, env_ids)
+                    reset_state_batch_indices(current_critic_state, env_ids)
                 log_prob = dist.log_prob(action)
                 log_probs.append(log_prob)
                 values.append(value)
