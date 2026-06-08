@@ -49,12 +49,13 @@ parser.add_argument(
     help="Hidden layer sizes (e.g. 512 256 128). Default: 512 256 128.",
 )
 parser.add_argument("--T", type=int, default=10, help="Time steps.")
+parser.add_argument("--alpha", type=float, default=None, help="Alpha for the LIF cell.")
 # MLFlow and Optuna
 parser.add_argument("--use_mlflow", action="store_true", default=True, help="Log to local MLFlow.")
 parser.add_argument("--optuna", action="store_true", default=False, help="Run Optuna hyperparameter study.")
 parser.add_argument("--optuna_n_trials", type=int, default=20, help="Number of Optuna trials when --optuna is set.")
 parser.add_argument("--run_name", type=str, default=None, help="MLFlow run name (default: train_ann_<timestamp> when run alone).")
-parser.add_argument("--experiment", type=str, default="test", help="MLFlow experiment name (default: use MLFlow's default).")
+parser.add_argument("--experiment", type=str, default="activation_experiment", help="MLFlow experiment name (default: use MLFlow's default).")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -108,6 +109,7 @@ DEFAULT_PPO_EPOCHS = 5
 DEFAULT_CLIP_PARAM = 0.2
 DEFAULT_MAX_STEPS = 50000
 DEFAULT_T = 10
+DEFAULT_ALPHA = 0.5
 
 MODEL_TEST_FREQ = DEFAULT_NUM_STEPS*10 # Логгируем каждые 10 rollout
 CHECKPOINT_INTERVAL = 5000
@@ -125,6 +127,7 @@ class Hyperparams:
     clip_param: float = DEFAULT_CLIP_PARAM
     max_steps: int = DEFAULT_MAX_STEPS
     T: int = DEFAULT_T
+    alpha: float = DEFAULT_ALPHA
 
     def to_dict(self):
         return {
@@ -136,6 +139,7 @@ class Hyperparams:
             "clip_param": self.clip_param,
             "max_steps": self.max_steps,
             "T": self.T,
+            "alpha": self.alpha,
         }
 
 
@@ -160,6 +164,8 @@ def _build_hyperparams_from_cli():
         hp.max_steps = args_cli.max_iterations
     if args_cli.T is not None:
         hp.T = args_cli.T
+    if args_cli.alpha is not None:
+        hp.alpha = args_cli.alpha
     return hp
 
 
@@ -237,6 +243,7 @@ def train_one_run(
         num_outputs,
         hyperparams.hidden_sizes,
         T=hyperparams.T,
+        alpha=hyperparams.alpha,
     ).to(device)
     optimizer = optim.Adam(model.parameters(), lr=hyperparams.lr)
 
@@ -406,51 +413,6 @@ def main():
         use_fabric=not args_cli.disable_fabric,
     )
 
-    if args_cli.optuna:
-        import optuna
-        optuna.logging.set_verbosity(optuna.logging.WARNING)
-
-        def objective(trial):
-            hp = Hyperparams(
-                lr=trial.suggest_float("lr", 1e-5, 1e-3, log=True),
-                num_steps=trial.suggest_int("num_steps", 16, 64),
-                mini_batch_size=trial.suggest_int("mini_batch_size", 64, 512),
-                ppo_epochs=trial.suggest_int("ppo_epochs", 3, 15),
-                clip_param=trial.suggest_float("clip_param", 0.1, 0.3),
-                hidden_sizes=[512, 256, 128],
-                max_steps=DEFAULT_MAX_STEPS,
-            )
-            if args_cli.max_iterations is not None:
-                hp.max_steps = args_cli.max_iterations
-            log_dir = os.path.join(
-                "logs",
-                args_cli.task,
-                "optuna",
-                datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
-                "trial_%d" % trial.number,
-            )
-            trial_seed = seed + trial.number
-            metrics = train_one_run(
-                env_cfg=env_cfg,
-                hyperparams=hp,
-                log_dir=log_dir,
-                seed=trial_seed,
-                use_mlflow=args_cli.use_mlflow,
-                run_name="trial_%d" % trial.number,
-                checkpoint_path=None,
-                task=args_cli.task,
-                num_envs=args_cli.num_envs,
-                video=args_cli.video,
-                video_length=args_cli.video_length,
-                video_interval=args_cli.video_interval,
-                experiment_name=args_cli.experiment,
-            )
-            return metrics["mean_reward"]
-
-        study = optuna.create_study(direction="maximize")
-        study.optimize(objective, n_trials=args_cli.optuna_n_trials)
-        print("Best trial: value=%.4f, params=%s" % (study.best_value, study.best_params))
-        return
 
     hp = _build_hyperparams_from_cli()
     if args_cli.max_iterations is not None:

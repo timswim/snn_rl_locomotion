@@ -153,13 +153,14 @@ def initial_zero_hidden(model, num_envs, num_inputs, device):
 
 # Нейросеть (актор-критик)
 class ActorCritic(nn.Module):
-    def __init__(self, num_inputs, num_outputs, hidden_sizes, T=16, std=0.0):
+    def __init__(self, num_inputs, num_outputs, hidden_sizes, T=16, alpha=1.0, std=0.0):
         super(ActorCritic, self).__init__()
 
         self.log_std = nn.Parameter(torch.ones(1, num_outputs) * std)
 
         self.constant_current_encoder = ConstantCurrentLIFEncoder(T)
         self.T = T
+        self.alpha = alpha
 
         self.critic = self.build_network(num_inputs, hidden_sizes, 1)
         self.actor = self.build_network(num_inputs, hidden_sizes, num_outputs) 
@@ -170,7 +171,7 @@ class ActorCritic(nn.Module):
         
         for h in hidden_sizes: 
             layers_list.append(nn.Linear(in_size, h))
-            layers_list.append(LIFCell(p=LIFParameters(method="super", alpha=100.0))) 
+            layers_list.append(LIFCell(p=LIFParameters(method="triangle", alpha=self.alpha))) 
             in_size = h 
         
         layers_list.append(LILinearCell(in_size, output_size)) 
