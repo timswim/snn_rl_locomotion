@@ -10,6 +10,7 @@ from torch.distributions import Normal
 from norse.torch.functional.lif import LIFParameters
 from norse.torch.module.lif import LIFCell
 from norse.torch.module.sequential import SequentialState
+from norse.torch.module.leaky_integrator import LILinearCell
 from norse.torch.module.encode import ConstantCurrentLIFEncoder, PopulationEncoder
 
 
@@ -170,7 +171,7 @@ def initial_zero_hidden(model, num_envs, num_inputs, device):
 
 # Нейросеть (актор-критик)
 class ActorCritic(nn.Module):
-    def __init__(self, num_inputs, num_outputs, hidden_sizes, T=16, alpha=1.0, std=0.0, lif_v_th=0.2, dt=0.01):
+    def __init__(self, num_inputs, num_outputs, hidden_sizes, T=16, alpha=1.0, std=0.0, lif_v_th=0.8, dt=0.01):
         super(ActorCritic, self).__init__()
 
         self.log_std = nn.Parameter(torch.ones(1, num_outputs) * std)
@@ -195,14 +196,12 @@ class ActorCritic(nn.Module):
         layers_list = []
         in_size = input_size
 
-        for i, h in enumerate(hidden_sizes):
+        for h in hidden_sizes:
             layers_list.append(nn.Linear(in_size, h))
-            # Последний скрытый Linear — без LIF после него: readout работает по аналоговому току.
-            if i < len(hidden_sizes) - 1:
-                layers_list.append(LIFCell(p=self.lif_params, dt=self.dt))
+            layers_list.append(LIFCell(p=self.lif_params, dt=self.dt))
             in_size = h
 
-        layers_list.append(nn.Linear(in_size, output_size))
+        layers_list.append(LILinearCell(in_size, output_size)) 
 
         return SequentialState(*layers_list)
 
