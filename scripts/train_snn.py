@@ -327,7 +327,7 @@ def train_one_run(
             mean_total_reward = total_reward / (num_envs * hyperparams.num_steps)
             recent_rewards.append(mean_total_reward)
             if step_idx % (hyperparams.num_steps*10) == 0: # Логгируем каждые 10 rollout TODO: убрать магическое число 10
-                print("Step: %d, Mean total reward: %.2f" % (step_idx, mean_total_reward))
+                print("Step: %d, Mean total reward: %.4f" % (step_idx, mean_total_reward))
                 writer.add_scalar("Reward/mean_total_reward", mean_total_reward, step_idx)
                 if use_mlflow:
                     mlflow.log_metric("Reward/mean_total_reward", mean_total_reward, step=step_idx)
