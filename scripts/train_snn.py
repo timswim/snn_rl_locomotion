@@ -111,8 +111,80 @@ DEFAULT_MAX_STEPS = 50000
 DEFAULT_T = 10
 DEFAULT_ALPHA = 0.5
 
-MODEL_TEST_FREQ = DEFAULT_NUM_STEPS*10 # Логгируем каждые 10 rollout
+MODEL_TEST_FREQ = DEFAULT_NUM_STEPS * 10  # Логгируем каждые 10 rollout
 CHECKPOINT_INTERVAL = 5000
+
+
+def log_mu_trace_plot(mu_trace_parts, action_parts, env_idx, global_step):
+    """
+    Строит график mu по внутренним шагам SNN (num_env_steps * T точек) и логирует в MLflow.
+    mu_trace_parts: список тензоров формы (T, num_outputs) для одной среды.
+    action_parts: список тензоров формы (num_outputs,) — сэмплированные действия на каждом env step.
+    """
+    if not mu_trace_parts:
+        return
+    import matplotlib.pyplot as plt
+    import mlflow
+
+    series = torch.cat(mu_trace_parts, dim=0).numpy()
+    num_points = series.shape[0]
+    mu_min, mu_max = float(series.min()), float(series.max())
+    mu_abs_max = float(np.abs(series).max())
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=False)
+
+    ax = axes[0]
+    for dim in range(series.shape[1]):
+        ax.plot(range(num_points), series[:, dim], label="mu[%d]" % dim, alpha=0.8)
+    ax.set_xlabel("Internal timestep (env_step * T + t)")
+    ax.set_ylabel("mu (actor mean)")
+    ax.set_title(
+        "Actor mu trace (env %d, %d points, min=%.2e, max=%.2e)"
+        % (env_idx, num_points, mu_min, mu_max)
+    )
+    if mu_abs_max > 0:
+        ax.legend(loc="upper right", ncol=min(4, series.shape[1]), fontsize=8)
+    else:
+        ax.text(
+            0.5,
+            0.5,
+            "mu ≈ 0: check LIF v_th and readout path",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=10,
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+        )
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[1]
+    if action_parts:
+        actions = torch.stack(action_parts, dim=0).numpy()
+        env_step_x = np.arange(actions.shape[0])
+        for dim in range(actions.shape[1]):
+            ax.plot(env_step_x, actions[:, dim], label="action[%d]" % dim, alpha=0.8)
+        ax.set_xlabel("Env step (within trace window)")
+        ax.set_ylabel("sampled action")
+        ax.set_title(
+            "Sampled actions (env %d, std=%.3f)"
+            % (env_idx, float(np.std(actions)))
+        )
+        ax.legend(loc="upper right", ncol=min(4, actions.shape[1]), fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+
+    plot_name = "mu_trace_env%d_step%d.png" % (env_idx, global_step)
+    mlflow.log_figure(fig, "mu_trace/%s" % plot_name)
+    mlflow.log_metrics(
+        {
+            "Diagnostics/mu_abs_max": mu_abs_max,
+            "Diagnostics/mu_mean": float(series.mean()),
+            "Diagnostics/action_abs_mean": float(np.abs(actions).mean()) if action_parts else 0.0,
+        },
+        step=global_step,
+    )
+    plt.close(fig)
 
 
 @dataclass
@@ -184,6 +256,9 @@ def train_one_run(
     video_length: int = 200,
     video_interval: int = 2000,
     experiment_name: str = None,
+    mu_plot_steps: int = 10,
+    mu_plot_env: int = 0,
+    mu_plot_interval: int = 960,
 ):
     """
     Один прогон обучения PPO: создаёт среду, модель, цикл обучения, закрывает среду.
@@ -212,6 +287,9 @@ def train_one_run(
             "task": task,
             "num_envs": num_envs,
             "seed": seed,
+            "mu_plot_steps": mu_plot_steps,
+            "mu_plot_env": mu_plot_env,
+            "mu_plot_interval": mu_plot_interval,
             **{k: str(v) if isinstance(v, list) else v for k, v in hyperparams.to_dict().items()},
         })
 
@@ -278,20 +356,32 @@ def train_one_run(
             total_reward = 0
             rollout_actor_states = []
             rollout_critic_states = []
+            trace_mu_this_rollout = use_mlflow and (step_idx % mu_plot_interval == 0)
+            mu_trace_parts = []
+            action_parts = []
 
-            for _ in range(hyperparams.num_steps):
+            for rollout_step in range(hyperparams.num_steps):
                 cached_sums = {}
                 for term_name, buf in envs.env.reward_manager._episode_sums.items():
                     cached_sums[term_name] = buf.clone()
 
                 rollout_actor_states.append(detach_state(current_actor_state))
                 rollout_critic_states.append(detach_state(current_critic_state))
-                dist, value, current_actor_state, current_critic_state = model(
-                    state, current_actor_state, current_critic_state
-                )
+                capture_mu = trace_mu_this_rollout and rollout_step < mu_plot_steps
+                if capture_mu:
+                    dist, value, current_actor_state, current_critic_state, mu_trace = model(
+                        state, current_actor_state, current_critic_state, return_mu_trace=True
+                    )
+                    mu_trace_parts.append(mu_trace[:, mu_plot_env, :].detach().cpu())
+                else:
+                    dist, value, current_actor_state, current_critic_state = model(
+                        state, current_actor_state, current_critic_state
+                    )
                 current_actor_state = detach_state(current_actor_state)
                 current_critic_state = detach_state(current_critic_state)
                 action = dist.sample()
+                if capture_mu:
+                    action_parts.append(action[mu_plot_env].detach().cpu())
                 next_state, reward, terminated, truncated, _ = envs.step(action)
                 total_reward = total_reward + torch.sum(reward).item()
 
@@ -322,6 +412,9 @@ def train_one_run(
                             writer.add_scalar("Episode_Reward/%s" % term_name, episodic_value.item(), step_idx)
                             if use_mlflow:
                                 mlflow.log_metric("Episode_Reward/%s" % term_name, episodic_value.item(), step=step_idx)
+
+            if trace_mu_this_rollout and mu_trace_parts:
+                log_mu_trace_plot(mu_trace_parts, action_parts, mu_plot_env, step_idx)
 
             # После полного rollout: средняя награда за шаг на одно env
             mean_total_reward = total_reward / (num_envs * hyperparams.num_steps)

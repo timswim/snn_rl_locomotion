@@ -10,7 +10,6 @@ from torch.distributions import Normal
 from norse.torch.functional.lif import LIFParameters
 from norse.torch.module.lif import LIFCell
 from norse.torch.module.sequential import SequentialState
-from norse.torch.module.leaky_integrator import LILinearCell
 from norse.torch.module.encode import ConstantCurrentLIFEncoder, PopulationEncoder
 
 
@@ -171,41 +170,56 @@ def initial_zero_hidden(model, num_envs, num_inputs, device):
 
 # Нейросеть (актор-критик)
 class ActorCritic(nn.Module):
-    def __init__(self, num_inputs, num_outputs, hidden_sizes, T=16, alpha=1.0, std=0.0):
+    def __init__(self, num_inputs, num_outputs, hidden_sizes, T=16, alpha=1.0, std=0.0, lif_v_th=0.2, dt=0.01):
         super(ActorCritic, self).__init__()
 
         self.log_std = nn.Parameter(torch.ones(1, num_outputs) * std)
 
-        self.constant_current_encoder = ConstantCurrentLIFEncoder(T)
+        # v_th=1.0 (дефолт Norse) слишком высок для population-кодов в [0, 1]:
+        # скрытые LIF не спайкают, LILinearCell на выходе не получает входа → mu = 0.
+        self.lif_params = LIFParameters(
+            method="triangle",
+            alpha=alpha,
+            v_th=torch.as_tensor(lif_v_th),
+        )
+        self.dt = dt
+        self.constant_current_encoder = ConstantCurrentLIFEncoder(T, p=self.lif_params, dt=self.dt)
         self.population_encoder = DeviceAwarePopulationEncoder(5)
         self.T = T
         self.alpha = alpha
 
-        self.critic = self.build_network(num_inputs*5, hidden_sizes, 1)
-        self.actor = self.build_network(num_inputs*5, hidden_sizes, num_outputs) 
-        
-    def build_network(self, input_size, hidden_sizes, output_size): 
+        self.critic = self.build_network(num_inputs * 5, hidden_sizes, 1)
+        self.actor = self.build_network(num_inputs * 5, hidden_sizes, num_outputs)
+
+    def build_network(self, input_size, hidden_sizes, output_size):
         layers_list = []
-        in_size = input_size 
-        
-        for h in hidden_sizes: 
+        in_size = input_size
+
+        for i, h in enumerate(hidden_sizes):
             layers_list.append(nn.Linear(in_size, h))
-            layers_list.append(LIFCell(p=LIFParameters(method="triangle", alpha=self.alpha))) 
-            in_size = h 
-        
-        layers_list.append(LILinearCell(in_size, output_size)) 
-            
+            # Последний скрытый Linear — без LIF после него: readout работает по аналоговому току.
+            if i < len(hidden_sizes) - 1:
+                layers_list.append(LIFCell(p=self.lif_params, dt=self.dt))
+            in_size = h
+
+        layers_list.append(nn.Linear(in_size, output_size))
+
         return SequentialState(*layers_list)
 
-    def forward(self, x, actor_state=None, critic_state=None):
+    def forward(self, x, actor_state=None, critic_state=None, return_mu_trace=False):
         x = self.population_encoder(x)
         x = x.reshape(x.shape[0], -1)
         x = self.constant_current_encoder(x)
+        mu_trace = [] if return_mu_trace else None
         for t in range(self.T):
             value, critic_state = self.critic(x[t, :, :], critic_state)
             mu, actor_state = self.actor(x[t, :, :], actor_state)
+            if return_mu_trace:
+                mu_trace.append(mu)
         std = self.log_std.exp().expand_as(mu)
         dist = Normal(mu, std)
+        if return_mu_trace:
+            return dist, value, actor_state, critic_state, torch.stack(mu_trace, dim=0)
         return dist, value, actor_state, critic_state
 
 # GAE — обобщённая оценка преимущества (Generalized Advantage Estimation)
