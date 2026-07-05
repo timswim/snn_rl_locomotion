@@ -11,7 +11,25 @@ from norse.torch.functional.lif import LIFParameters
 from norse.torch.module.lif import LIFCell
 from norse.torch.module.sequential import SequentialState
 from norse.torch.module.leaky_integrator import LILinearCell
-from norse.torch.module.encode import ConstantCurrentLIFEncoder
+from norse.torch.module.encode import ConstantCurrentLIFEncoder, PopulationEncoder
+
+
+class DeviceAwarePopulationEncoder(PopulationEncoder):
+    """Norse PopulationEncoder создаёт centres на CPU — переносим на device входа."""
+
+    def forward(self, input_tensor):
+        size = input_tensor.shape + (self.out_features,)
+        scale = self.scale if self.scale is not None else input_tensor.max()
+        centres = torch.linspace(
+            0,
+            scale,
+            self.out_features,
+            device=input_tensor.device,
+            dtype=input_tensor.dtype,
+        ).expand(size)
+        x = input_tensor.unsqueeze(-1).expand(size)
+        distances = self.distance_function(x, centres) * scale
+        return self.kernel(distances)
 
 # BPTT / detach:
 # - Внутри одного forward() градиенты идут по микрошагам t=0..T-1 (динамика мембраны).
@@ -159,11 +177,12 @@ class ActorCritic(nn.Module):
         self.log_std = nn.Parameter(torch.ones(1, num_outputs) * std)
 
         self.constant_current_encoder = ConstantCurrentLIFEncoder(T)
+        self.population_encoder = DeviceAwarePopulationEncoder(5)
         self.T = T
         self.alpha = alpha
 
-        self.critic = self.build_network(num_inputs, hidden_sizes, 1)
-        self.actor = self.build_network(num_inputs, hidden_sizes, num_outputs) 
+        self.critic = self.build_network(num_inputs*5, hidden_sizes, 1)
+        self.actor = self.build_network(num_inputs*5, hidden_sizes, num_outputs) 
         
     def build_network(self, input_size, hidden_sizes, output_size): 
         layers_list = []
@@ -179,6 +198,8 @@ class ActorCritic(nn.Module):
         return SequentialState(*layers_list)
 
     def forward(self, x, actor_state=None, critic_state=None):
+        x = self.population_encoder(x)
+        x = x.reshape(x.shape[0], -1)
         x = self.constant_current_encoder(x)
         for t in range(self.T):
             value, critic_state = self.critic(x[t, :, :], critic_state)

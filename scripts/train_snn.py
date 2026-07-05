@@ -140,7 +140,7 @@ class Hyperparams:
             "max_steps": self.max_steps,
             "T": self.T,
             "alpha": self.alpha,
-            "coding_type": "ConstantCurrentLIFEncoder",
+            "coding_type": "PopulationEncoder+ConstantCurrentLIFEncoder",
         }
 
 
