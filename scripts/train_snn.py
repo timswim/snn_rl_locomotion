@@ -55,7 +55,7 @@ parser.add_argument("--use_mlflow", action="store_true", default=True, help="Log
 parser.add_argument("--optuna", action="store_true", default=False, help="Run Optuna hyperparameter study.")
 parser.add_argument("--optuna_n_trials", type=int, default=20, help="Number of Optuna trials when --optuna is set.")
 parser.add_argument("--run_name", type=str, default=None, help="MLFlow run name (default: train_ann_<timestamp> when run alone).")
-parser.add_argument("--experiment", type=str, default="activation_experiment", help="MLFlow experiment name (default: use MLFlow's default).")
+parser.add_argument("--experiment", type=str, default="coding_experiment", help="MLFlow experiment name (default: use MLFlow's default).")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -140,6 +140,7 @@ class Hyperparams:
             "max_steps": self.max_steps,
             "T": self.T,
             "alpha": self.alpha,
+            "coding_type": "ConstantCurrentLIFEncoder",
         }
 
 
