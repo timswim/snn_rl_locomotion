@@ -187,6 +187,45 @@ def log_mu_trace_plot(mu_trace_parts, action_parts, env_idx, global_step):
     plt.close(fig)
 
 
+def log_spike_activity_plots(spike_activity_parts, hidden_sizes, global_step):
+    """
+    Строит по одному графику на каждый LIF-слой актора: доля спайкующих нейронов (%)
+    усреднённая по T микрошагам SNN, по env steps в окне трассировки.
+    spike_activity_parts: список длины num_env_steps; каждый элемент — список из L float (%).
+    """
+    if not spike_activity_parts:
+        return
+    import matplotlib.pyplot as plt
+    import mlflow
+
+    activity = np.asarray(spike_activity_parts, dtype=np.float64)
+    num_env_steps = activity.shape[0]
+    env_step_x = np.arange(num_env_steps)
+
+    for layer_idx, hidden_size in enumerate(hidden_sizes):
+        layer_series = activity[:, layer_idx]
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(env_step_x, layer_series, color="C%d" % layer_idx, linewidth=1.5)
+        ax.set_xlabel("Env step (within trace window)")
+        ax.set_ylabel("Spiking neurons (%)")
+        ax.set_ylim(0, 100)
+        ax.set_title(
+            "Actor LIF layer %d (%d neurons): mean spike fraction over T micro-steps"
+            % (layer_idx + 1, hidden_size)
+        )
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+
+        plot_name = "spike_activity_layer%d_step%d.png" % (layer_idx + 1, global_step)
+        mlflow.log_figure(fig, "spike_activity/%s" % plot_name)
+        mlflow.log_metric(
+            "SpikeActivity/actor_layer%d_pct" % (layer_idx + 1),
+            float(layer_series.mean()),
+            step=global_step,
+        )
+        plt.close(fig)
+
+
 @dataclass
 class Hyperparams:
     """Hyperparameter container for PPO training."""
@@ -359,6 +398,7 @@ def train_one_run(
             trace_mu_this_rollout = use_mlflow and (step_idx % mu_plot_interval == 0)
             mu_trace_parts = []
             action_parts = []
+            spike_activity_parts = []
 
             for rollout_step in range(hyperparams.num_steps):
                 cached_sums = {}
@@ -369,10 +409,15 @@ def train_one_run(
                 rollout_critic_states.append(detach_state(current_critic_state))
                 capture_mu = trace_mu_this_rollout and rollout_step < mu_plot_steps
                 if capture_mu:
-                    dist, value, current_actor_state, current_critic_state, mu_trace = model(
-                        state, current_actor_state, current_critic_state, return_mu_trace=True
+                    dist, value, current_actor_state, current_critic_state, mu_trace, spike_activity = model(
+                        state,
+                        current_actor_state,
+                        current_critic_state,
+                        return_mu_trace=True,
+                        return_spike_activity=True,
                     )
                     mu_trace_parts.append(mu_trace[:, mu_plot_env, :].detach().cpu())
+                    spike_activity_parts.append(spike_activity)
                 else:
                     dist, value, current_actor_state, current_critic_state = model(
                         state, current_actor_state, current_critic_state
@@ -415,6 +460,10 @@ def train_one_run(
 
             if trace_mu_this_rollout and mu_trace_parts:
                 log_mu_trace_plot(mu_trace_parts, action_parts, mu_plot_env, step_idx)
+            if trace_mu_this_rollout and spike_activity_parts:
+                log_spike_activity_plots(
+                    spike_activity_parts, hyperparams.hidden_sizes, step_idx
+                )
 
             # После полного rollout: средняя награда за шаг на одно env
             mean_total_reward = total_reward / (num_envs * hyperparams.num_steps)
