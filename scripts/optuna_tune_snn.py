@@ -22,7 +22,7 @@ def parse_args():
     p.add_argument("--task", type=str, default="Isaac-Velocity-Flat-Unitree-A1-v0", help="Task name.")
     p.add_argument("--n_trials", type=int, default=20, help="Number of Optuna trials.")
     p.add_argument("--seed", type=int, default=1, help="Base seed (trial seed = seed + trial.number).")
-    p.add_argument("--max_iterations", type=int, default=15000, help="Max training steps per trial.")
+    p.add_argument("--max_iterations", type=int, default=10000, help="Max training steps per trial.")
     p.add_argument("--num_envs", type=int, default=None, help="Number of envs (default from train_snn).")
     p.add_argument("--use_mlflow", action="store_true", help="Pass --use_mlflow to each trial.")
     p.add_argument("--study_name", type=str, default=None, help="Optuna study name for storage.")
@@ -53,6 +53,8 @@ def run_trial(
         "--ppo_epochs", str(trial_params["ppo_epochs"]),
         "--clip_param", str(trial_params["clip_param"]),
         "--T", str(trial_params["T"]),
+        "--alpha", str(trial_params["alpha"]),
+        "--lif_v_th", str(trial_params["lif_v_th"]),
         "--headless",
     ]
     if max_iterations is not None:
@@ -110,6 +112,8 @@ def main():
             "ppo_epochs": trial.suggest_int("ppo_epochs", 3, 15),
             "clip_param": trial.suggest_float("clip_param", 0.1, 0.3),
             "T": trial.suggest_int("T", 1, 15),
+            "alpha": trial.suggest_float("alpha", 0.2, 0.8),
+            "lif_v_th": trial.suggest_float("lif_v_th", 0.2, 0.6),
         }
         seed = args.seed + trial.number
         return run_trial(

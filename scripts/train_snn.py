@@ -50,12 +50,13 @@ parser.add_argument(
 )
 parser.add_argument("--T", type=int, default=10, help="Time steps.")
 parser.add_argument("--alpha", type=float, default=None, help="Alpha for the LIF cell.")
+parser.add_argument("--lif_v_th", type=float, default=None, help="LIF spike threshold (v_th).")
 # MLFlow and Optuna
 parser.add_argument("--use_mlflow", action="store_true", default=True, help="Log to local MLFlow.")
 parser.add_argument("--optuna", action="store_true", default=False, help="Run Optuna hyperparameter study.")
 parser.add_argument("--optuna_n_trials", type=int, default=20, help="Number of Optuna trials when --optuna is set.")
 parser.add_argument("--run_name", type=str, default=None, help="MLFlow run name (default: train_ann_<timestamp> when run alone).")
-parser.add_argument("--experiment", type=str, default="find_correct_output", help="MLFlow experiment name (default: use MLFlow's default).")
+parser.add_argument("--experiment", type=str, default="Optimize_direct_tahn", help="MLFlow experiment name (default: use MLFlow's default).")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -110,6 +111,7 @@ DEFAULT_CLIP_PARAM = 0.2
 DEFAULT_MAX_STEPS = 50000
 DEFAULT_T = 10
 DEFAULT_ALPHA = 0.5
+DEFAULT_LIF_V_TH = 0.4
 
 MODEL_TEST_FREQ = DEFAULT_NUM_STEPS * 10  # Логгируем каждые 10 rollout
 CHECKPOINT_INTERVAL = 5000
@@ -239,6 +241,7 @@ class Hyperparams:
     max_steps: int = DEFAULT_MAX_STEPS
     T: int = DEFAULT_T
     alpha: float = DEFAULT_ALPHA
+    lif_v_th: float = DEFAULT_LIF_V_TH
 
     def to_dict(self):
         return {
@@ -251,7 +254,8 @@ class Hyperparams:
             "max_steps": self.max_steps,
             "T": self.T,
             "alpha": self.alpha,
-            "coding_type": "PopulationEncoder+ConstantCurrentLIFEncoder",
+            "lif_v_th": self.lif_v_th,
+            "coding_type": "ConstantCurrentLIFEncoder + tanh",
         }
 
 
@@ -278,6 +282,8 @@ def _build_hyperparams_from_cli():
         hp.T = args_cli.T
     if args_cli.alpha is not None:
         hp.alpha = args_cli.alpha
+    if args_cli.lif_v_th is not None:
+        hp.lif_v_th = args_cli.lif_v_th
     return hp
 
 
@@ -362,6 +368,7 @@ def train_one_run(
         hyperparams.hidden_sizes,
         T=hyperparams.T,
         alpha=hyperparams.alpha,
+        lif_v_th=hyperparams.lif_v_th,
     ).to(device)
     optimizer = optim.Adam(model.parameters(), lr=hyperparams.lr)
 

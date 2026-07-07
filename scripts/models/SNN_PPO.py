@@ -212,7 +212,7 @@ def initial_zero_hidden(model, num_envs, num_inputs, device):
 
 # Нейросеть (актор-критик)
 class ActorCritic(nn.Module):
-    def __init__(self, num_inputs, num_outputs, hidden_sizes, T=16, alpha=1.0, std=0.0, lif_v_th=0.2, dt=0.01):
+    def __init__(self, num_inputs, num_outputs, hidden_sizes, T=16, alpha=1.0, std=0.0, lif_v_th=0.4, dt=0.01):
         super(ActorCritic, self).__init__()
 
         self.log_std = nn.Parameter(torch.ones(1, num_outputs) * std)
@@ -272,6 +272,7 @@ class ActorCritic(nn.Module):
             else:
                 value, critic_state = self.critic(x_t, critic_state)
                 mu, actor_state = self.actor(x_t, actor_state)
+            mu = torch.tanh(mu)
             if return_mu_trace:
                 mu_trace.append(mu)
         std = self.log_std.exp().expand_as(mu)
