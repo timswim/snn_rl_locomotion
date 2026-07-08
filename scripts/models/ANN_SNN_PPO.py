@@ -42,12 +42,20 @@ def initial_zero_hidden(model, num_envs, num_inputs, device):
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, num_inputs, num_outputs, hidden_sizes, T=16, alpha=1.0, std=0.0):
+    def __init__(self, num_inputs, num_outputs, hidden_sizes, T=16, alpha=1.0, std=0.0, lif_v_th=0.4, dt=0.01):
         super(ActorCritic, self).__init__()
 
         self.log_std = nn.Parameter(torch.ones(1, num_outputs) * std)
 
-        self.constant_current_encoder = ConstantCurrentLIFEncoder(T)
+        # v_th=1.0 (дефолт Norse) слишком высок для population-кодов в [0, 1]:
+        # скрытые LIF не спайкают, LILinearCell на выходе не получает входа → mu = 0.
+        self.lif_params = LIFParameters(
+            method="triangle",
+            alpha=alpha,
+            v_th=torch.as_tensor(lif_v_th),
+        )
+        self.dt = dt
+        self.constant_current_encoder = ConstantCurrentLIFEncoder(T, p=self.lif_params, dt=self.dt)
         self.T = T
         self.alpha = alpha
 
@@ -73,7 +81,7 @@ class ActorCritic(nn.Module):
 
         for h in hidden_sizes:
             layers_list.append(nn.Linear(in_size, h))
-            layers_list.append(LIFCell(p=LIFParameters(method="triangle", alpha=self.alpha)))
+            layers_list.append(LIFCell(p=self.lif_params, dt=self.dt))
             in_size = h
 
         layers_list.append(LILinearCell(in_size, output_size))
@@ -86,6 +94,7 @@ class ActorCritic(nn.Module):
         x_enc = self.constant_current_encoder(x)
         for t in range(self.T):
             mu, actor_state = self.actor(x_enc[t, :, :], actor_state)
+            mu = torch.tanh(mu)
 
         std = self.log_std.exp().expand_as(mu)
         dist = Normal(mu, std)
