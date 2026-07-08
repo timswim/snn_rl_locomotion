@@ -108,10 +108,10 @@ def main():
         trial_params = {
             "lr": trial.suggest_float("lr", 1e-5, 1e-3, log=True),
             "num_steps": trial.suggest_int("num_steps", 16, 64),
-            "mini_batch_size": trial.suggest_int("mini_batch_size", 64, 512),
+            "mini_batch_size": trial.suggest_int("mini_batch_size", 128, 512),
             "ppo_epochs": trial.suggest_int("ppo_epochs", 3, 15),
             "clip_param": trial.suggest_float("clip_param", 0.1, 0.3),
-            "T": trial.suggest_int("T", 1, 15),
+            "T": trial.suggest_int("T", 1, 10),
             "alpha": trial.suggest_float("alpha", 0.2, 0.8),
             "lif_v_th": trial.suggest_float("lif_v_th", 0.2, 0.6),
         }
