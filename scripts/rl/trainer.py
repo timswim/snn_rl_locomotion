@@ -14,7 +14,7 @@ from .ppo import compute_gae, ppo_update
 
 @dataclass
 class TrainConfig:
-    """Конфигурация одного прогона PPO (позже заполняется из Hydra)."""
+    """Конфигурация одного прогона PPO (поля из Hydra ``configs/train.yaml``)."""
 
     task: str
     num_envs: int = 256
@@ -54,6 +54,12 @@ class PPOTrainer:
     """
 
     def __init__(self, env_cfg, agent, config: TrainConfig):
+        """
+        Параметры:
+            env_cfg: конфиг среды Isaac Lab (после ``parse_env_cfg``).
+            agent: адаптер агента; trainer не ветвится по типу сети.
+            config: гиперпараметры одного прогона.
+        """
         self.env_cfg = env_cfg
         self.agent = agent
         self.config = config
@@ -66,7 +72,7 @@ class PPOTrainer:
         """
         Создаёт среду и модель, выполняет цикл, закрывает среду.
 
-        Returns:
+        Возвращает:
             dict с ``mean_reward`` и ``final_step``.
         """
         cfg = self.config

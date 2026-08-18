@@ -31,4 +31,5 @@ def __getattr__(name):
 
 
 def __dir__():
+    """Список имён модуля, включая ленивые экспорты из ``__all__``."""
     return sorted(set(globals().keys()) | set(__all__))

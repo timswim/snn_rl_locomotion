@@ -268,6 +268,7 @@ def run_study(
     optuna.logging.set_verbosity(optuna.logging.INFO)
 
     def objective(trial):
+        """Один trial: сэмпл гиперпараметров и subprocess ``train.py``."""
         trial_params = suggest_params(trial, search_space)
         return run_trial(
             trial_params,

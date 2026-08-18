@@ -30,6 +30,10 @@ class AgentAdapter(ABC):
     name: str = "base"
 
     def __init__(self, hidden_sizes=None):
+        """
+        Параметры:
+            hidden_sizes: размеры скрытых слоёв; иначе ``DEFAULT_HIDDEN_SIZES``.
+        """
         self.hidden_sizes = list(hidden_sizes or DEFAULT_HIDDEN_SIZES)
         self.model = None
         self.optimizer = None
@@ -87,7 +91,7 @@ class AgentAdapter(ABC):
         """
         Один шаг политики.
 
-        Returns:
+        Возвращает:
             dist, value, new_hidden
         """
         dist, value, _, _ = self.model(obs, None, None)
@@ -121,6 +125,7 @@ class AnnAgent(AgentAdapter):
     name = "ann"
 
     def build_model(self, num_inputs, num_outputs):
+        """Создаёт полносвязный актор-критик."""
         return AnnActorCritic(num_inputs, num_outputs, self.hidden_sizes)
 
 
@@ -140,6 +145,13 @@ class SnnAgent(AgentAdapter):
         mu_plot_env=0,
         mu_plot_interval=960,
     ):
+        """
+        Параметры:
+            hidden_sizes: размеры скрытых слоёв SNN.
+            T: микрошаги SNN на шаг среды.
+            alpha, lif_v_th, dt: параметры LIF Norse.
+            mu_plot_steps, mu_plot_env, mu_plot_interval: окно и период графиков mu/spikes.
+        """
         super().__init__(hidden_sizes=hidden_sizes)
         self.T = T
         self.alpha = alpha
@@ -154,6 +166,7 @@ class SnnAgent(AgentAdapter):
         self._spike_activity_parts = []
 
     def extra_log_params(self):
+        """Параметры SNN для MLflow (T, alpha, порог LIF, настройки графиков)."""
         return {
             "hidden_sizes": self.hidden_sizes,
             "T": self.T,
@@ -166,6 +179,7 @@ class SnnAgent(AgentAdapter):
         }
 
     def build_model(self, num_inputs, num_outputs):
+        """Создаёт полный SNN актор-критик (Norse LIF)."""
         return SnnActorCritic(
             num_inputs,
             num_outputs,
@@ -177,6 +191,7 @@ class SnnAgent(AgentAdapter):
         )
 
     def init_hidden(self, num_envs, num_inputs, device):
+        """Нулевые состояния актора и критика той же структуры, что у Norse."""
         with torch.no_grad():
             z = torch.zeros(num_envs, num_inputs, device=device)
             _, _, actor_state, critic_state = self.model(z, None, None)
@@ -186,6 +201,7 @@ class SnnAgent(AgentAdapter):
         )
 
     def on_rollout_start(self, step_idx, use_mlflow):
+        """Решает, писать ли mu-trace и spikes в этом rollout."""
         self._trace_this_rollout = bool(use_mlflow) and (
             step_idx % self.mu_plot_interval == 0
         )
@@ -194,10 +210,12 @@ class SnnAgent(AgentAdapter):
         self._spike_activity_parts = []
 
     def snapshot(self, hidden):
+        """Detach состояний актора и критика для PPO replay."""
         actor_state, critic_state = hidden
         return detach_state(actor_state), detach_state(critic_state)
 
     def act(self, obs, hidden, rollout_step):
+        """Шаг SNN; в окне трассировки дополнительно собирает mu и spikes."""
         actor_state, critic_state = hidden
         capture = self._trace_this_rollout and rollout_step < self.mu_plot_steps
         if capture:
@@ -219,10 +237,12 @@ class SnnAgent(AgentAdapter):
         return dist, value, (actor_state, critic_state)
 
     def after_action(self, action, rollout_step):
+        """Сохраняет сэмплированное действие среды ``mu_plot_env`` для графика."""
         if self._trace_this_rollout and rollout_step < self.mu_plot_steps:
             self._action_parts.append(action[self.mu_plot_env].detach().cpu())
 
     def reset_on_done(self, hidden, done):
+        """Обнуляет скрытое состояние актора и критика у завершённых сред."""
         if hidden is None or not done.any():
             return
         env_ids = torch.where(done)[0]
@@ -231,6 +251,7 @@ class SnnAgent(AgentAdapter):
         reset_state_batch_indices(critic_state, env_ids)
 
     def on_rollout_end(self, step_idx, logger):
+        """Пишет графики mu-trace и spike activity в MLflow."""
         if self._trace_this_rollout and self._mu_trace_parts:
             log_mu_trace_plot(
                 self._mu_trace_parts,
@@ -248,11 +269,13 @@ class SnnAgent(AgentAdapter):
             )
 
     def stack_snapshots(self, snapshots):
+        """Склеивает состояния актора и критика по шагам rollout."""
         actor_list = [a for a, _ in snapshots]
         critic_list = [c for _, c in snapshots]
         return stack_rollout_states(actor_list), stack_rollout_states(critic_list)
 
     def value(self, obs, hidden):
+        """V(s) при текущих скрытых состояниях актора и критика."""
         actor_state, critic_state = hidden
         _, next_value, _, _ = self.model(obs, actor_state, critic_state)
         return next_value
@@ -271,6 +294,11 @@ class HybridAgent(AgentAdapter):
         lif_v_th=0.4,
         dt=0.01,
     ):
+        """
+        Параметры:
+            hidden_sizes: размеры скрытых слоёв.
+            T, alpha, lif_v_th, dt: параметры SNN-актора (критик — ANN).
+        """
         super().__init__(hidden_sizes=hidden_sizes)
         self.T = T
         self.alpha = alpha
@@ -278,6 +306,7 @@ class HybridAgent(AgentAdapter):
         self.dt = dt
 
     def extra_log_params(self):
+        """Параметры гибрида для MLflow (T, alpha, порог LIF)."""
         return {
             "hidden_sizes": self.hidden_sizes,
             "T": self.T,
@@ -288,9 +317,11 @@ class HybridAgent(AgentAdapter):
         }
 
     def checkpoint_extra(self):
+        """Метка типа модели в чекпоинте."""
         return {"model_type": "snn_actor_ann_critic"}
 
     def build_model(self, num_inputs, num_outputs):
+        """Создаёт гибрид: SNN-актор и ANN-критик."""
         return HybridActorCritic(
             num_inputs,
             num_outputs,
@@ -302,33 +333,40 @@ class HybridAgent(AgentAdapter):
         )
 
     def init_hidden(self, num_envs, num_inputs, device):
+        """Нулевое состояние только актора (критик без состояния)."""
         with torch.no_grad():
             z = torch.zeros(num_envs, num_inputs, device=device)
             _, _, actor_state, _ = self.model(z, None, None)
         return detach_state(structural_zeros_like(actor_state))
 
     def snapshot(self, hidden):
+        """Detach состояния актора для PPO replay."""
         return detach_state(hidden)
 
     def act(self, obs, hidden, rollout_step):
+        """Шаг гибрида: SNN-актор со состоянием, ANN-критик без него."""
         dist, value, actor_state, _ = self.model(obs, hidden, None)
         actor_state = detach_state(actor_state)
         return dist, value, actor_state
 
     def reset_on_done(self, hidden, done):
+        """Обнуляет скрытое состояние актора у завершённых сред."""
         if hidden is None or not done.any():
             return
         env_ids = torch.where(done)[0]
         reset_state_batch_indices(hidden, env_ids)
 
     def stack_snapshots(self, snapshots):
+        """Склеивает состояния актора; критик — ``None``."""
         return stack_rollout_states(snapshots), None
 
     def value(self, obs, hidden):
+        """V(s) ANN-критика при текущем состоянии SNN-актора."""
         _, next_value, _, _ = self.model(obs, hidden, None)
         return next_value
 
 
+# Имя агента из configs/agent/*.yaml → класс адаптера.
 AGENT_REGISTRY = {
     "ann": AnnAgent,
     "snn": SnnAgent,

@@ -42,7 +42,7 @@ def forward_sequential_state_with_lif_spikes(module, input_tensor, state=None):
     """
     Forward через SequentialState с возвратом спайков после каждого LIFCell.
 
-    Returns:
+    Возвращает:
         output, state, lif_spikes — список тензоров (batch, n_hidden) по порядку LIF-слоёв.
     """
     state = [None] * len(module) if state is None else state
@@ -68,7 +68,7 @@ def aggregate_spike_activity_over_T(lif_spikes_per_t):
     Усредняет долю спайков по T микрошагам для каждого LIF-слоя.
 
     lif_spikes_per_t: список длины T; каждый элемент — список LIF-спайков по слоям.
-    Returns:
+    Возвращает:
         список из L float — средняя доля спайков (%) по T для каждого слоя.
     """
     if not lif_spikes_per_t:
@@ -98,6 +98,16 @@ class ActorCritic(nn.Module):
         lif_v_th=0.4,
         dt=0.01,
     ):
+        """
+        Параметры:
+            num_inputs, num_outputs: размерности наблюдения и действия.
+            hidden_sizes: размеры скрытых слоёв актора и критика.
+            T: число микрошагов SNN на один шаг среды.
+            alpha: параметр суррогратного градиента LIF (triangle).
+            std: начальное значение ``log_std`` политики.
+            lif_v_th: порог спайка LIF.
+            dt: шаг интегрирования Norse.
+        """
         super().__init__()
         self.log_std = nn.Parameter(torch.ones(1, num_outputs) * std)
         self.lif_params = make_lif_params(alpha, lif_v_th)
@@ -126,7 +136,7 @@ class ActorCritic(nn.Module):
         """
         Прямой проход по T микрошагам.
 
-        Returns:
+        Возвращает:
             dist, value, actor_state, critic_state
             и опционально mu_trace / spike_activity, если запрошены адаптером.
         """

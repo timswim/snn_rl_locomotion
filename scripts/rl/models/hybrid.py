@@ -24,6 +24,16 @@ class ActorCritic(nn.Module):
         lif_v_th=0.4,
         dt=0.01,
     ):
+        """
+        Параметры:
+            num_inputs, num_outputs: размерности наблюдения и действия.
+            hidden_sizes: размеры скрытых слоёв актора и критика.
+            T: число микрошагов SNN на один шаг среды.
+            alpha: параметр суррогратного градиента LIF (triangle).
+            std: начальное значение ``log_std`` политики.
+            lif_v_th: порог спайка LIF.
+            dt: шаг интегрирования Norse.
+        """
         super().__init__()
         self.log_std = nn.Parameter(torch.ones(1, num_outputs) * std)
         self.lif_params = make_lif_params(alpha, lif_v_th)
@@ -42,7 +52,7 @@ class ActorCritic(nn.Module):
         """
         Прямой проход: критик по сырому наблюдению, актор по T микрошагам SNN.
 
-        Returns:
+        Возвращает:
             dist, value, actor_state, critic_state — critic_state всегда None.
         """
         value = self.critic(x)

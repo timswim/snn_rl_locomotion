@@ -29,21 +29,26 @@ class FakeTrial:
     """Минимальный trial: suggest_* возвращает нижнюю границу / первый choice."""
 
     def suggest_float(self, name, low, high, log=False, step=None):
+        """Возвращает нижнюю границу ``low``."""
         return float(low)
 
     def suggest_int(self, name, low, high, log=False, step=1):
+        """Возвращает нижнюю границу ``low``."""
         return int(low)
 
     def suggest_categorical(self, name, choices):
+        """Возвращает первый элемент ``choices``."""
         return list(choices)[0]
 
 
 def _write_fake_train(path: Path, body: str) -> None:
+    """Пишет исполняемый stub ``train.py`` для subprocess-тестов."""
     path.write_text(textwrap.dedent(body).lstrip(), encoding="utf-8")
     path.chmod(path.stat().st_mode | 0o111)
 
 
 class TestLoadSearchSpace(unittest.TestCase):
+    """Загрузка YAML search space и проверка границ / ошибок."""
     def test_ann_yaml_matches_legacy_bounds(self):
         cfg = load_optuna_config(_REPO_ROOT / "configs" / "optuna" / "ann.yaml")
         self.assertEqual(cfg["agent"], "ann")
@@ -92,6 +97,7 @@ class TestLoadSearchSpace(unittest.TestCase):
 
 
 class TestSuggestAndArgv(unittest.TestCase):
+    """Сэмпл search space и сбор argv Hydra-overrides."""
     def test_suggest_params_uses_hydra_keys(self):
         cfg = load_optuna_config(_REPO_ROOT / "configs" / "optuna" / "snn.yaml")
         params = suggest_params(FakeTrial(), cfg["search_space"])
@@ -164,6 +170,7 @@ class TestSuggestAndArgv(unittest.TestCase):
 
 
 class TestRunTrialMetricFile(unittest.TestCase):
+    """Чтение ``OPTUNA_METRIC_FILE`` и сентинел при падении subprocess."""
     def test_reads_metric_written_by_subprocess(self):
         with tempfile.TemporaryDirectory() as tmp:
             train_script = Path(tmp) / "fake_train.py"
@@ -287,6 +294,7 @@ class TestRunTrialMetricFile(unittest.TestCase):
 
 
 def _optuna_available() -> bool:
+    """True, если пакет optuna импортируется."""
     try:
         import optuna  # noqa: F401
         return True
@@ -296,6 +304,7 @@ def _optuna_available() -> bool:
 
 @unittest.skipUnless(_optuna_available(), "optuna не установлен")
 class TestRunStudy(unittest.TestCase):
+    """Интеграция ``run_study`` с фейковым train-скриптом."""
     def test_study_maximizes_metric_from_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             train_script = Path(tmp) / "fake_train.py"
@@ -331,6 +340,7 @@ class TestRunStudy(unittest.TestCase):
 
 
 class TestLazyPackageImport(unittest.TestCase):
+    """Импорт ``rl.optuna_driver`` не тянет torch / norse / Isaac Lab."""
     def test_optuna_driver_import_does_not_load_torch(self):
         code = (
             "import sys\n"

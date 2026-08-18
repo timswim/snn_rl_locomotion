@@ -20,6 +20,14 @@ class MLflowLogger:
         experiment_name=None,
         params=None,
     ):
+        """
+        Параметры:
+            enabled: если False, все вызовы — no-op.
+            log_dir: каталог прогона; в конце кладётся в артефакты MLflow.
+            run_name: имя run; ``None`` — имя по умолчанию MLflow.
+            experiment_name: имя experiment; ``None`` — текущий experiment.
+            params: словарь параметров для ``log_params``.
+        """
         self.enabled = bool(enabled)
         self.log_dir = log_dir
         self._mlflow = None

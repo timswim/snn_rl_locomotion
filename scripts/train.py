@@ -16,7 +16,7 @@ from pathlib import Path
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(
-    description="Train a PPO agent (ANN / SNN / hybrid) with Hydra config."
+    description="Обучение PPO (ANN / SNN / hybrid) с Hydra-конфигом."
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()

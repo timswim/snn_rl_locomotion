@@ -21,6 +21,12 @@ class ActorCritic(nn.Module):
     """ANN актор-критик. Скрытого состояния нет: ``forward`` возвращает ``None, None``."""
 
     def __init__(self, num_inputs, num_outputs, hidden_sizes, std=0.0):
+        """
+        Параметры:
+            num_inputs, num_outputs: размерности наблюдения и действия.
+            hidden_sizes: размеры скрытых слоёв MLP.
+            std: начальное значение ``log_std`` (лог стандартного отклонения политики).
+        """
         super().__init__()
         self.log_std = nn.Parameter(torch.ones(1, num_outputs) * std)
         self.critic = build_mlp(num_inputs, hidden_sizes, 1)
@@ -30,7 +36,7 @@ class ActorCritic(nn.Module):
         """
         Прямой проход.
 
-        Returns:
+        Возвращает:
             dist, value, actor_state, critic_state — состояния всегда None.
         """
         value = self.critic(x)
