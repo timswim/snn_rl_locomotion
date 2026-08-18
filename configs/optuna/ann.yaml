@@ -1,0 +1,29 @@
+# Пространство поиска Optuna для ANN.
+# Ключи — Hydra-overrides для scripts/train.py (не composable Hydra-конфиг).
+# CLI: python optuna_tune.py --agent ann
+
+agent: ann
+max_steps: 50000
+
+search_space:
+  ppo.lr:
+    type: float
+    low: 1.0e-5
+    high: 1.0e-3
+    log: true
+  ppo.num_steps:
+    type: int
+    low: 16
+    high: 64
+  ppo.mini_batch_size:
+    type: int
+    low: 64
+    high: 512
+  ppo.ppo_epochs:
+    type: int
+    low: 3
+    high: 15
+  ppo.clip_param:
+    type: float
+    low: 0.1
+    high: 0.3

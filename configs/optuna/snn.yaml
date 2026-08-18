@@ -1,0 +1,41 @@
+# Пространство поиска Optuna для полного SNN.
+# Ключи — Hydra-overrides для scripts/train.py (не composable Hydra-конфиг).
+# CLI: python optuna_tune.py --agent snn
+
+agent: snn
+max_steps: 10000
+
+search_space:
+  ppo.lr:
+    type: float
+    low: 1.0e-5
+    high: 1.0e-3
+    log: true
+  ppo.num_steps:
+    type: int
+    low: 16
+    high: 64
+  ppo.mini_batch_size:
+    type: int
+    low: 128
+    high: 512
+  ppo.ppo_epochs:
+    type: int
+    low: 3
+    high: 15
+  ppo.clip_param:
+    type: float
+    low: 0.1
+    high: 0.3
+  agent.T:
+    type: int
+    low: 1
+    high: 10
+  agent.alpha:
+    type: float
+    low: 0.2
+    high: 0.8
+  agent.lif_v_th:
+    type: float
+    low: 0.2
+    high: 0.6

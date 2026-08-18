@@ -22,7 +22,7 @@ ppo:
 
 use_mlflow: true
 run_name: null
-experiment_name: null
+experiment_name: Optuna-test
 log_interval: null
 
 save_checkpoints: false
