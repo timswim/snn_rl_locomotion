@@ -1,115 +1,149 @@
-# Template for Isaac Lab Projects
+# SNN RL locomotion
 
-## Overview
+Обучение политики ходьбы (velocity tracking) для **Unitree A1** в [Isaac Lab](https://isaac-sim.github.io/IsaacLab/): PPO с тремя архитектурами актор-критика.
 
-This project/repository serves as a template for building projects or extensions based on Isaac Lab.
-It allows you to develop in an isolated environment, outside of the core Isaac Lab repository.
+- **ANN** — полносвязный актор и критик
+- **SNN** — спайковая сеть на [Norse](https://github.com/norse/norse) (LIF, ConstantCurrent-кодирование)
+- **hybrid** — SNN-актор + ANN-критик
 
-**Key Features:**
+Среды — расширение `source/locomotion` (gym-задачи flat / rough). Алгоритм PPO, адаптеры агентов и цикл обучения лежат в `scripts/rl/`, конфиги — Hydra в `configs/`. Трекинг — MLflow; подбор гиперпараметров — Optuna (каждый trial в отдельном процессе Isaac Sim).
 
-- `Isolation` Work outside the core Isaac Lab repository, ensuring that your development efforts remain self-contained.
-- `Flexibility` This template is set up to allow your code to be run as an extension in Omniverse.
+Команды запуска обучения и тюнинга: **[scripts/README.md](scripts/README.md)**.
 
-**Keywords:** extension, template, isaaclab
+## Установка
 
-## Installation
+**Isaac Lab ставится отдельно.** Для этого репозитория используется **тот же venv**, что и у Isaac Lab (Python 3.11). Новый интерпретатор создавать не нужно: в нём уже есть Isaac Sim, `isaaclab` и `isaaclab_tasks`. Сюда же доставляются пакеты проекта.
 
-- Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
-  We recommend using the conda or uv installation as it simplifies calling Python scripts from the terminal.
+1. Установите Isaac Lab по [официальной инструкции](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html). Репозиторий клонируйте **рядом** с `IsaacLab/`, не внутрь него.
 
-- Clone or copy this project/repository separately from the Isaac Lab installation (i.e. outside the `IsaacLab` directory):
+2. Активируйте venv Isaac Lab и в нём поставьте зависимости этого проекта:
 
-- Using a python interpreter that has Isaac Lab installed, install the library in editable mode using:
+   ```bash
+   source /path/to/IsaacLab/.venv/bin/activate   # путь к вашему venv Isaac Lab
+   pip install -r requirements.txt
+   pip install -e source/locomotion
+   ```
+
+   В `requirements.txt`: MLflow, Norse, Optuna. Пакет `locomotion` регистрирует gym-среды.
+
+После этого запускайте скрипты тем же `python` из venv Isaac Lab. Подробности CLI, Hydra-overrides, MLflow и Optuna — в [scripts/README.md](scripts/README.md).
+
+---
+
+# Шаблон проектов Isaac Lab
+
+Ниже — заметки из исходного шаблона репозитория (IDE, расширение Omniverse, pre-commit).
+
+## Обзор
+
+Этот репозиторий сделан по шаблону внешних проектов Isaac Lab: разработка идёт **вне** основного дерева Isaac Lab, код можно подключать как расширение Omniverse.
+
+**Особенности:**
+
+- `Isolation` — работа вне ядра Isaac Lab, изменения остаются в этом репозитории.
+- `Flexibility` — проект можно включить как расширение Omniverse.
+
+**Ключевые слова:** extension, template, isaaclab
+
+## Установка (шаблон)
+
+- Установите Isaac Lab по [инструкции](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
+  Удобнее conda или uv: проще вызывать Python-скрипты из терминала.
+
+- Клонируйте или скопируйте этот репозиторий отдельно от установки Isaac Lab (то есть **вне** каталога `IsaacLab`).
+
+- Тем интерпретатором, в котором уже стоит Isaac Lab, поставьте библиотеку в editable-режиме:
 
     ```bash
-    # use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
+    # вместо python используйте 'PATH_TO_isaaclab.sh|bat -p', если Isaac Lab не в вашем venv/conda
     python -m pip install -e source/locomotion
+    ```
 
-- Verify that the extension is correctly installed by:
+- Проверьте, что расширение установлено:
 
-    - Listing the available tasks:
+    - Список задач:
 
-        Note: It the task name changes, it may be necessary to update the search pattern `"Template-"`
-        (in the `scripts/list_envs.py` file) so that it can be listed.
-
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/list_envs.py
-        ```
-
-    - Running a task:
+        Если имя задачи изменилось, может понадобиться обновить шаблон поиска `"Template-"`
+        (в файле `scripts/old/list_envs.py`), чтобы она попала в список.
 
         ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/<RL_LIBRARY>/train.py --task=<TASK_NAME>
+        # вместо python — 'FULL_PATH_TO_isaaclab.sh|bat -p', если Isaac Lab не в venv/conda
+        python scripts/old/list_envs.py
         ```
 
-    - Running a task with dummy agents:
+    - Запуск задачи:
 
-        These include dummy agents that output zero or random agents. They are useful to ensure that the environments are configured correctly.
+        ```bash
+        # вместо python — 'FULL_PATH_TO_isaaclab.sh|bat -p', если Isaac Lab не в venv/conda
+        python scripts/train.py --task=<TASK_NAME>
+        ```
 
-        - Zero-action agent
+    - Запуск с dummy-агентами:
+
+        Агенты с нулевым или случайным действием. Нужны, чтобы проверить, что среды собраны правильно.
+
+        - Агент с нулевым действием
 
             ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/zero_agent.py --task=<TASK_NAME>
+            # вместо python — 'FULL_PATH_TO_isaaclab.sh|bat -p', если Isaac Lab не в venv/conda
+            python scripts/old/zero_agent.py --task=<TASK_NAME>
             ```
-        - Random-action agent
+        - Агент со случайным действием
 
             ```bash
-            # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-            python scripts/random_agent.py --task=<TASK_NAME>
+            # вместо python — 'FULL_PATH_TO_isaaclab.sh|bat -p', если Isaac Lab не в venv/conda
+            python scripts/old/random_agent.py --task=<TASK_NAME>
             ```
 
-### Set up IDE (Optional)
+### Настройка IDE (необязательно)
 
-To setup the IDE, please follow these instructions:
+Чтобы настроить IDE:
 
-- Run VSCode Tasks, by pressing `Ctrl+Shift+P`, selecting `Tasks: Run Task` and running the `setup_python_env` in the drop down menu.
-  When running this task, you will be prompted to add the absolute path to your Isaac Sim installation.
+- Запустите VSCode Tasks: `Ctrl+Shift+P` → `Tasks: Run Task` → в списке выберите `setup_python_env`.
+  Задача спросит абсолютный путь к установке Isaac Sim.
 
-If everything executes correctly, it should create a file .python.env in the `.vscode` directory.
-The file contains the python paths to all the extensions provided by Isaac Sim and Omniverse.
-This helps in indexing all the python modules for intelligent suggestions while writing code.
+Если всё прошло успешно, в каталоге `.vscode` появится файл `.python.env`.
+В нём — python-пути ко всем расширениям Isaac Sim и Omniverse.
+Это нужно для индексирования модулей и подсказок в редакторе.
 
-### Setup as Omniverse Extension (Optional)
+### Подключение как расширение Omniverse (необязательно)
 
-We provide an example UI extension that will load upon enabling your extension defined in `source/locomotion/locomotion/ui_extension_example.py`.
+Пример UI-расширения, которое загружается при включении вашего расширения, лежит в `source/locomotion/locomotion/ui_extension_example.py`.
 
-To enable your extension, follow these steps:
+Чтобы включить расширение:
 
-1. **Add the search path of this project/repository** to the extension manager:
-    - Navigate to the extension manager using `Window` -> `Extensions`.
-    - Click on the **Hamburger Icon**, then go to `Settings`.
-    - In the `Extension Search Paths`, enter the absolute path to the `source` directory of this project/repository.
-    - If not already present, in the `Extension Search Paths`, enter the path that leads to Isaac Lab's extension directory directory (`IsaacLab/source`)
-    - Click on the **Hamburger Icon**, then click `Refresh`.
+1. **Добавьте путь поиска этого репозитория** в менеджер расширений:
+    - Откройте менеджер: `Window` → `Extensions`.
+    - Нажмите **иконку-гамбургер**, затем `Settings`.
+    - В `Extension Search Paths` укажите абсолютный путь к каталогу `source` этого репозитория.
+    - Если его ещё нет, в те же `Extension Search Paths` добавьте путь к расширениям Isaac Lab (`IsaacLab/source`).
+    - Снова **гамбургер** → `Refresh`.
 
-2. **Search and enable your extension**:
-    - Find your extension under the `Third Party` category.
-    - Toggle it to enable your extension.
+2. **Найдите и включите расширение**:
+    - Оно в категории `Third Party`.
+    - Включите переключателем.
 
-## Code formatting
+## Форматирование кода
 
-We have a pre-commit template to automatically format your code.
-To install pre-commit:
+В репозитории есть шаблон pre-commit для автоформатирования.
+Установка:
 
 ```bash
 pip install pre-commit
 ```
 
-Then you can run pre-commit with:
+Запуск:
 
 ```bash
 pre-commit run --all-files
 ```
 
-## Troubleshooting
+## Устранение неполадок
 
-### Pylance Missing Indexing of Extensions
+### Pylance не индексирует расширения
 
-In some VsCode versions, the indexing of part of the extensions is missing.
-In this case, add the path to your extension in `.vscode/settings.json` under the key `"python.analysis.extraPaths"`.
+В части версий VS Code индексирование расширений неполное.
+Добавьте путь к расширению в `.vscode/settings.json` в ключ `"python.analysis.extraPaths"`.
 
 ```json
 {
@@ -119,17 +153,16 @@ In this case, add the path to your extension in `.vscode/settings.json` under th
 }
 ```
 
-### Pylance Crash
+### Падение Pylance
 
-If you encounter a crash in `pylance`, it is probable that too many files are indexed and you run out of memory.
-A possible solution is to exclude some of omniverse packages that are not used in your project.
-To do so, modify `.vscode/settings.json` and comment out packages under the key `"python.analysis.extraPaths"`
-Some examples of packages that can likely be excluded are:
+Если `pylance` падает, скорее всего проиндексировано слишком много файлов и не хватает памяти.
+Можно исключить неиспользуемые пакеты Omniverse: в `.vscode/settings.json` закомментируйте лишние пути в `"python.analysis.extraPaths"`.
+Примеры того, что обычно можно убрать:
 
-```json
-"<path-to-isaac-sim>/extscache/omni.anim.*"         // Animation packages
-"<path-to-isaac-sim>/extscache/omni.kit.*"          // Kit UI tools
-"<path-to-isaac-sim>/extscache/omni.graph.*"        // Graph UI tools
-"<path-to-isaac-sim>/extscache/omni.services.*"     // Services tools
+```
+"<path-to-isaac-sim>/extscache/omni.anim.*"         // пакеты анимации
+"<path-to-isaac-sim>/extscache/omni.kit.*"          // UI-инструменты Kit
+"<path-to-isaac-sim>/extscache/omni.graph.*"        // UI-инструменты Graph
+"<path-to-isaac-sim>/extscache/omni.services.*"     // сервисы
 ...
 ```
