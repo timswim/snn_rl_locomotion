@@ -1,0 +1,42 @@
+# Общий конфиг обучения PPO (Hydra).
+# Агент подключается через defaults; CLI: python train.py agent=snn ppo.lr=1e-4
+
+defaults:
+  - agent: ann
+  - _self_
+
+task: Isaac-Velocity-Flat-Unitree-A1-v0
+num_envs: 256
+seed: 1
+disable_fabric: false
+
+ppo:
+  lr: 1.0e-4
+  num_steps: 32
+  mini_batch_size: 192
+  ppo_epochs: 5
+  clip_param: 0.2
+  max_steps: 50000
+  gamma: 0.99
+  tau: 0.95
+
+use_mlflow: true
+run_name: null
+experiment_name: null
+log_interval: null
+
+save_checkpoints: false
+checkpoint_interval: 5000
+checkpoint_path: null
+
+video: false
+video_length: 200
+video_interval: 2000
+
+# Не уходить в outputs/ и не менять cwd (пути logs/, mlruns/).
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false

@@ -1,0 +1,10 @@
+# Полный SNN актор-критик (Norse LIF).
+name: snn
+hidden_sizes: [512, 256, 128]
+T: 10
+alpha: 0.5
+lif_v_th: 0.4
+dt: 0.01
+mu_plot_steps: 10
+mu_plot_env: 0
+mu_plot_interval: 960
